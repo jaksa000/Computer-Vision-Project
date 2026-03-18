@@ -1,0 +1,14 @@
+{
+  "accuracy": 0.7628,
+  "f1_weighted": 0.7631,
+  "f1_macro": 0.756,
+  "cohen_kappa_Quadratic": 0.9013,
+  "f1_per_class": {
+    "Normal": 0.8387,
+    "Doubtful": 0.7211,
+    "Mild": 0.5833,
+    "Moderate": 0.8116,
+    "Severe": 0.8254
+  },
+  "model_name": "convnext_tiny"
+}
