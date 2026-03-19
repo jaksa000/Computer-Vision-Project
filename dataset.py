@@ -15,12 +15,11 @@ import config
 # FUNKCJA: wczytaj ścieżki i etykiety z folderów
 # =============================================================================
 
-def load_image_paths(data_root: Path, expert: str) -> list[tuple[Path, int]]:
+def load_image_paths(data_root=config.DATA_ROOT, expert=config.EXPERT):
     expert_folder = data_root / expert
     samples = []
     for label_idx, class_name in enumerate(config.CLASS_NAMES):
         class_folder = expert_folder / class_name
-        # Wczytaj wszystkie pliki graficzne z folderu
         image_extensions = {".png"}
         images_in_folder = [
             f for f in class_folder.iterdir()
@@ -28,7 +27,6 @@ def load_image_paths(data_root: Path, expert: str) -> list[tuple[Path, int]]:
         ]
         for img_path in images_in_folder:
             samples.append((img_path, label_idx))
-
         print(f"  Klasa {label_idx} ({class_name}): {len(images_in_folder)} obrazów")
 
     print(f"\n  Łącznie: {len(samples)} obrazów")
@@ -108,12 +106,8 @@ class KneeXrayDataset(Dataset):
 # =============================================================================
 
 def build_dataloaders(data_root=config.DATA_ROOT, expert=config.EXPERT):
-    print("=" * 60)
     print(f"Ładowanie danych z: {data_root / expert}")
-    print("=" * 60)
-
     all_samples = load_image_paths(data_root, expert)
-
     train_samples, val_samples, test_samples = stratified_split(
         all_samples,
         config.TRAIN_RATIO,
@@ -167,6 +161,4 @@ def build_dataloaders(data_root=config.DATA_ROOT, expert=config.EXPERT):
     )
 
     print(f"\nDataLoadery gotowe.")
-    print("=" * 60)
-
     return train_loader, val_loader, test_loader, class_weights_tensor

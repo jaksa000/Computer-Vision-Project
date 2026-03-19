@@ -29,7 +29,6 @@ def get_predictions(model,loader,):
     all_labels = []
     all_preds  = []
     all_probs  = []
-
     for images, labels in loader:
         images = images.to(config.DEVICE)
 
@@ -79,40 +78,6 @@ def compute_metrics(y_true,y_pred):
     return metrics
 
 
-def plot_training_history(history,model_name,save_dir,):
-    """
-      - Overfitting: train_acc rośnie, val_acc maleje → za mało augmentacji lub za duży model
-      - Underfitting: obydwie są niskie → za mały model lub za mało epok
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-    epochs = range(1, len(history["train_loss"]) + 1)
-
-    #Loss
-    axes[0].plot(epochs, history["train_loss"], "b-", label="Train Loss")
-    axes[0].plot(epochs, history["val_loss"],   "r-", label="Val Loss")
-    axes[0].set_title(f"{model_name} — Loss")
-    axes[0].set_xlabel("Epoka")
-    axes[0].set_ylabel("Loss")
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-
-    #Accuracy
-    axes[1].plot(epochs, [a * 100 for a in history["train_acc"]], "b-", label="Train Acc")
-    axes[1].plot(epochs, [a * 100 for a in history["val_acc"]],   "r-", label="Val Acc")
-    axes[1].set_title(f"{model_name} — Accuracy")
-    axes[1].set_xlabel("Epoka")
-    axes[1].set_ylabel("Accuracy (%)")
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    out_path = save_dir / f"{model_name}_training_history.png"
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Historia treningowa zapisana: {out_path}")
-
-
 # =============================================================================
 # GŁÓWNA FUNKCJA EWALUACJI
 # =============================================================================
@@ -142,9 +107,6 @@ def evaluate_model(model_name,model,test_loader,history,save_dir=config.RESULTS_
         zero_division=0,
     )
     print(f"\n  Classification Report:\n{report}")
-
-
-    plot_training_history(history, model_name, save_dir)
 
     metrics["model_name"] = model_name
     json_path = save_dir / f"{model_name}_metrics.json"
