@@ -1,15 +1,15 @@
 # Instalacja: pip install -r requirements.txt
-#
-# Jeśli masz GPU NVIDIA:
+
+# Jeśli masz GPU NVIDIA z CUDA:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 # Jeśli tylko CPU:
 #   pip install torch torchvision
 
 torch>=2.0.0
 torchvision>=0.15.0
-timm>=0.9.0           # Setki pretrenowanych architektur (ResNet, EfficientNet, ...)
-albumentations>=1.3.0 # Profesjonalne augmentacje (na razie nieużywane, ale przyda się)
-scikit-learn>=1.3.0   # Metryki: accuracy, f1, kappa, confusion matrix
-matplotlib>=3.7.0     # Wykresy
+timm>=0.9.0           
+albumentations>=1.3.0 
+scikit-learn>=1.3.0   
+matplotlib>=3.7.0     
 numpy>=1.24.0
-Pillow>=9.0.0         # Wczytywanie obrazów (PIL)
+Pillow>=9.0.0        
