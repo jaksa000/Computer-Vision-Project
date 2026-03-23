@@ -17,15 +17,12 @@ RESULTS_DIR = Path("results")
 
 CLASS_NAMES = ["0Normal", "1Doubtful", "2Mild", "3Moderate", "4Severe"]
 CLASS_DISPLAY_NAMES = ["Normal", "Doubtful", "Mild", "Moderate", "Severe"]
-NUM_CLASSES = len(CLASS_NAMES)  # 5
+NUM_CLASSES = len(CLASS_NAMES)
 
 # =============================================================================
 # PREPROCESSING OBRAZÓW
 # =============================================================================
 IMAGE_SIZE = 224
-
-# Normalizacja — wartości z ImageNet (pretraining był na tych danych)
-# Używamy ich bo nasze modele są pretrenowane na ImageNet
 NORMALIZE_MEAN = [0.485, 0.456, 0.406]
 NORMALIZE_STD  = [0.229, 0.224, 0.225]
 
@@ -53,10 +50,8 @@ PATIENCE = 5
 # SPRZĘT
 # =============================================================================
 
-# Automatycznie wybierz GPU jeśli dostępne, inaczej CPU
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Ile wątków do ładowania danych (0 = główny wątek, bezpieczne na Windows)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_WORKERS = 0
 
 # =============================================================================

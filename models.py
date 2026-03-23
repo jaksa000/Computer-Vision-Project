@@ -9,12 +9,8 @@ def build_model(model_cfg):
     name        = model_cfg["name"]
     timm_id     = model_cfg["timm_id"]
     pretrained  = model_cfg["pretrained"]
-    description = model_cfg.get("description", "")
 
     print(f"\nBuduję model: {name}")
-    print(f"  timm ID:     {timm_id}")
-    print(f"  Pretrained:  {pretrained}")
-    print(f"  Opis:        {description}")
 
     model = timm.create_model(
         timm_id,
