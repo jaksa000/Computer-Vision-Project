@@ -22,7 +22,7 @@ PODZIAŁ NA ZBIÓR CV ORAZ HOLD-OUT (SEJF)
   Dane Testowe / Sejf (15%): 248 obrazów
 
 ================================================================================
-🚀 ROZPOCZĘCIE TRENINGU MODELU: resnet50
+ ROZPOCZĘCIE TRENINGU MODELU: resnet50
 ================================================================================
 
 --- resnet50 | FOLD 1/5 ---
@@ -445,10 +445,10 @@ weighted avg       0.76      0.74      0.74       280
   Metryki zapisane: results/resnet50_fold5_metrics.json
   Prawdopodobieństwa zapisane: results/resnet50_fold5_test_probs.npz
 
-✅ ZAKOŃCZONO: resnet50. Średnia Kappa z 5 foldów: 0.8949 ±0.0176
+ZAKOŃCZONO: resnet50. Średnia Kappa z 5 foldów: 0.8949 ±0.0176
 
 ================================================================================
-🚀 ROZPOCZĘCIE TRENINGU MODELU: efficientnet_b3
+ ROZPOCZĘCIE TRENINGU MODELU: efficientnet_b3
 ================================================================================
 
 --- efficientnet_b3 | FOLD 1/5 ---
@@ -818,10 +818,10 @@ weighted avg       0.76      0.76      0.75       280
   Metryki zapisane: results/efficientnet_b3_fold5_metrics.json
   Prawdopodobieństwa zapisane: results/efficientnet_b3_fold5_test_probs.npz
 
-✅ ZAKOŃCZONO: efficientnet_b3. Średnia Kappa z 5 foldów: 0.8605 ±0.0385
+ZAKOŃCZONO: efficientnet_b3. Średnia Kappa z 5 foldów: 0.8605 ±0.0385
 
 ================================================================================
-🚀 ROZPOCZĘCIE TRENINGU MODELU: densenet121
+ ROZPOCZĘCIE TRENINGU MODELU: densenet121
 ================================================================================
 
 --- densenet121 | FOLD 1/5 ---
@@ -1215,10 +1215,10 @@ weighted avg       0.82      0.82      0.82       280
   Metryki zapisane: results/densenet121_fold5_metrics.json
   Prawdopodobieństwa zapisane: results/densenet121_fold5_test_probs.npz
 
-✅ ZAKOŃCZONO: densenet121. Średnia Kappa z 5 foldów: 0.9137 ±0.0153
+ ZAKOŃCZONO: densenet121. Średnia Kappa z 5 foldów: 0.9137 ±0.0153
 
 ================================================================================
-🚀 ROZPOCZĘCIE TRENINGU MODELU: mobilenetv3_large
+ ROZPOCZĘCIE TRENINGU MODELU: mobilenetv3_large
 ================================================================================
 
 --- mobilenetv3_large | FOLD 1/5 ---
@@ -1625,10 +1625,10 @@ weighted avg       0.81      0.80      0.80       280
   Metryki zapisane: results/mobilenetv3_large_fold5_metrics.json
   Prawdopodobieństwa zapisane: results/mobilenetv3_large_fold5_test_probs.npz
 
-✅ ZAKOŃCZONO: mobilenetv3_large. Średnia Kappa z 5 foldów: 0.8969 ±0.0165
+ZAKOŃCZONO: mobilenetv3_large. Średnia Kappa z 5 foldów: 0.8969 ±0.0165
 
 ================================================================================
-🚀 ROZPOCZĘCIE TRENINGU MODELU: convnext_tiny
+ ROZPOCZĘCIE TRENINGU MODELU: convnext_tiny
 ================================================================================
 
 --- convnext_tiny | FOLD 1/5 ---
@@ -2017,7 +2017,7 @@ weighted avg       0.77      0.77      0.77       280
   Metryki zapisane: results/convnext_tiny_fold5_metrics.json
   Prawdopodobieństwa zapisane: results/convnext_tiny_fold5_test_probs.npz
 
-✅ ZAKOŃCZONO: convnext_tiny. Średnia Kappa z 5 foldów: 0.9084 ±0.0202
+ ZAKOŃCZONO: convnext_tiny. Średnia Kappa z 5 foldów: 0.9084 ±0.0202
 
 =========================================================================================================
 PODSUMOWANIE POJEDYNCZYCH FOLDÓW
