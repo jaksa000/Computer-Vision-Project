@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 import config
-from dataset import load_all_samples, build_fold_dataloaders
+from dataset import load_all_samples, build_fold_dataloaders, split_holdout, build_test_dataloader
 from models  import build_model
 from train   import train_model
 from evaluate import evaluate_model, print_summary_table
@@ -42,26 +42,36 @@ def main():
 
     all_samples = load_all_samples()
 
-    # cv_results[model_name] = [metrics_fold1, metrics_fold2, ...]
-    cv_results = {m["name"]: [] for m in config.MODELS_CONFIG}
+    # --- Odcinamy sejf (hold-out) ---
+    cv_samples, test_samples = split_holdout(all_samples)
+    test_loader = build_test_dataloader(test_samples)
 
-    for fold_idx in range(config.NUM_FOLDS):
-        print(f"\n{'=' * 60}")
-        print(f"FOLD {fold_idx + 1}/{config.NUM_FOLDS}")
-        print(f"{'=' * 60}")
+    cv_results = {}
 
-        train_loader, val_loader, class_weights = build_fold_dataloaders(
-            all_samples, fold_idx
-        )
+    # =========================================================================
+    # PĘTLA ZEWNĘTRZNA: MODELE (Tak jak chciałeś!)
+    # =========================================================================
+    for model_cfg in config.MODELS_CONFIG:
+        model_name = model_cfg["name"]
 
-        for model_cfg in config.MODELS_CONFIG:
-            model_name = model_cfg["name"]
-            run_name   = f"{model_name}_fold{fold_idx + 1}"
+        print(f"\n{'=' * 80}")
+        print(f"🚀 ROZPOCZĘCIE TRENINGU MODELU: {model_name}")
+        print(f"{'=' * 80}")
 
-            print(f"\n{'#' * 60}")
-            print(f"# MODEL: {model_name}  |  Fold {fold_idx + 1}")
-            print(f"{'#' * 60}")
+        model_metrics = []
 
+        # =====================================================================
+        # PĘTLA WEWNĘTRZNA: FOLDY DLA DANEGO MODELU
+        # =====================================================================
+        for fold_idx in range(config.NUM_FOLDS):
+            print(f"\n--- {model_name} | FOLD {fold_idx + 1}/{config.NUM_FOLDS} ---")
+
+            # Generujemy split na nowo (jest bezpieczny i identyczny dzięki RANDOM_SEED)
+            train_loader, val_loader, class_weights = build_fold_dataloaders(
+                cv_samples, fold_idx
+            )
+
+            run_name = f"{model_name}_fold{fold_idx + 1}"
             model = build_model(model_cfg)
 
             history = train_model(
@@ -75,24 +85,30 @@ def main():
             metrics = evaluate_model(
                 model_name=run_name,
                 model=model,
-                test_loader=val_loader,   # brak hold-out: ewaluacja na val folda
+                test_loader=val_loader,
                 history=history,
             )
-            cv_results[model_name].append(metrics)
 
+            model_metrics.append(metrics)
+
+            # Czyszczenie pamięci karty graficznej po tym konkretnym foldzie
             del model
             torch.cuda.empty_cache()
             gc.collect()
 
-    # Podsumowanie per-fold (wszystkie runy)
+        # Po zakończeniu 5 foldów, zapisujemy wyniki tego modelu
+        cv_results[model_name] = model_metrics
+
+        # Opcjonalnie: Szybkie wyświetlenie średniej tylko dla TEGO modelu od razu!
+        kappas = [m["cohen_kappa_Quadratic"] for m in model_metrics]
+        print(f"\n✅ ZAKOŃCZONO: {model_name}. Średnia Kappa z 5 foldów: {np.mean(kappas):.4f} ±{np.std(kappas):.4f}")
+
+    # Po przeliczeniu wszystkich modeli wyświetlamy tabele podsumowujące
     all_metrics = [m for folds in cv_results.values() for m in folds]
     print_summary_table(all_metrics)
-
-    # Podsumowanie CV ze średnią ± std
     print_cv_summary(cv_results)
 
-    print("\n✓ Gotowe! Wyniki w folderze:", config.RESULTS_DIR)
-
+    print("Wyniki w folderze:", config.RESULTS_DIR)
 
 if __name__ == "__main__":
     main()
