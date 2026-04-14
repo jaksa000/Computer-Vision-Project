@@ -2,9 +2,11 @@ import time
 import csv
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from sklearn.metrics import balanced_accuracy_score, f1_score
 
 import config
 
@@ -16,8 +18,9 @@ import config
 def train_one_epoch(model, loader, criterion, optimizer):
     model.train()
     total_loss = 0.0
-    correct    = 0
     total      = 0
+    all_labels = []
+    all_preds  = []
 
     for batch_idx, (images, labels) in enumerate(loader):
         images = images.to(config.DEVICE)
@@ -34,12 +37,14 @@ def train_one_epoch(model, loader, criterion, optimizer):
         total_loss += loss.item() * images.size(0)  # loss * batch_size
 
         _, predicted = torch.max(logits, dim=1)
-        correct += (predicted == labels).sum().item()
-        total   += labels.size(0)
+        all_labels.extend(labels.cpu().numpy())
+        all_preds.extend(predicted.cpu().numpy())
+        total += labels.size(0)
 
-    avg_loss = total_loss / total
-    accuracy = correct / total
-    return avg_loss, accuracy
+    avg_loss     = total_loss / total
+    bal_accuracy = balanced_accuracy_score(all_labels, all_preds)
+    f1_macro     = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    return avg_loss, bal_accuracy, f1_macro
 
 
 # =============================================================================
@@ -47,11 +52,12 @@ def train_one_epoch(model, loader, criterion, optimizer):
 # =============================================================================
 
 @torch.no_grad()
-def evaluate(model,loader,criterion,):
+def evaluate(model, loader, criterion):
     model.eval()
     total_loss = 0.0
-    correct    = 0
     total      = 0
+    all_labels = []
+    all_preds  = []
 
     for images, labels in loader:
         images = images.to(config.DEVICE)
@@ -62,12 +68,15 @@ def evaluate(model,loader,criterion,):
 
         total_loss += loss.item() * images.size(0)
         _, predicted = torch.max(logits, dim=1)
-        correct += (predicted == labels).sum().item()
-        total   += labels.size(0)
 
-    avg_loss = total_loss / total
-    accuracy = correct / total
-    return avg_loss, accuracy
+        all_labels.extend(labels.cpu().numpy())
+        all_preds.extend(predicted.cpu().numpy())
+        total += labels.size(0)
+
+    avg_loss     = total_loss / total
+    bal_accuracy = balanced_accuracy_score(all_labels, all_preds)
+    f1_macro     = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    return avg_loss, bal_accuracy, f1_macro
 
 
 # =============================================================================
@@ -107,8 +116,8 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
 
 
     history = {
-        "train_loss": [], "train_acc": [],
-        "val_loss":   [], "val_acc":   [],
+        "train_loss":    [], "train_bal_acc": [], "train_f1": [],
+        "val_loss":      [], "val_bal_acc":   [], "val_f1":   [],
     }
 
     best_val_loss    = float("inf")
@@ -116,7 +125,7 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
 
     with open(log_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["epoch", "train_loss", "train_acc", "val_loss", "val_acc", "lr"])
+        writer.writerow(["epoch", "train_loss", "train_bal_acc", "train_f1", "val_loss", "val_bal_acc", "val_f1", "lr"])
 
         # =====================================================================
         # GŁÓWNA PĘTLA TRENINGOWA
@@ -125,12 +134,12 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
             epoch_start = time.time()
 
             # --- Trening ---
-            train_loss, train_acc = train_one_epoch(
+            train_loss, train_bal_acc, train_f1 = train_one_epoch(
                 model, train_loader, criterion, optimizer
             )
 
             # --- Walidacja ---
-            val_loss, val_acc = evaluate(
+            val_loss, val_bal_acc, val_f1 = evaluate(
                 model, val_loader, criterion
             )
 
@@ -140,15 +149,17 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
 
             # --- Zapisz do historii ---
             history["train_loss"].append(train_loss)
-            history["train_acc"].append(train_acc)
+            history["train_bal_acc"].append(train_bal_acc)
+            history["train_f1"].append(train_f1)
             history["val_loss"].append(val_loss)
-            history["val_acc"].append(val_acc)
+            history["val_bal_acc"].append(val_bal_acc)
+            history["val_f1"].append(val_f1)
 
             # --- Zaloguj do CSV ---
             writer.writerow([
                 epoch,
-                f"{train_loss:.4f}", f"{train_acc:.4f}",
-                f"{val_loss:.4f}",   f"{val_acc:.4f}",
+                f"{train_loss:.4f}",    f"{train_bal_acc:.4f}", f"{train_f1:.4f}",
+                f"{val_loss:.4f}",      f"{val_bal_acc:.4f}",   f"{val_f1:.4f}",
                 f"{current_lr:.6f}",
             ])
             f.flush()  # Zapisz od razu (nie czekaj na zamknięcie pliku)
@@ -157,8 +168,8 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
             elapsed = time.time() - epoch_start
             print(
                 f"Epoka [{epoch:3d}/{config.NUM_EPOCHS}]  "
-                f"Train Loss: {train_loss:.4f}  Acc: {train_acc*100:.1f}%  |  "
-                f"Val Loss: {val_loss:.4f}  Acc: {val_acc*100:.1f}%  |  "
+                f"Train Loss: {train_loss:.4f}  Bal.Acc: {train_bal_acc*100:.1f}%  F1: {train_f1:.4f}  |  "
+                f"Val Loss: {val_loss:.4f}  Bal.Acc: {val_bal_acc*100:.1f}%  F1: {val_f1:.4f}  |  "
                 f"LR: {current_lr:.2e}  ({elapsed:.1f}s)"
             )
 
@@ -173,8 +184,9 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
                     "model_name": model_name,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "val_loss":   val_loss,
-                    "val_acc":    val_acc,
+                    "val_loss":     val_loss,
+                    "val_bal_acc":  val_bal_acc,
+                    "val_f1":       val_f1,
                 }, checkpoint_path)
 
                 print(f"  ✓ Zapisano najlepszy checkpoint (val_loss: {best_val_loss:.4f})")

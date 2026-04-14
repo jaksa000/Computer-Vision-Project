@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 
 from sklearn.metrics import (
-    accuracy_score,
+    balanced_accuracy_score,
     f1_score,
     cohen_kappa_score,
     classification_report,
@@ -52,27 +52,17 @@ def get_predictions(model,loader,):
 # OBLICZ METRYKI
 # =============================================================================
 
-def compute_metrics(y_true,y_pred):
-    acc   = accuracy_score(y_true, y_pred)
-    f1_w  = f1_score(y_true, y_pred, average="weighted", zero_division=0)
-    f1_m  = f1_score(y_true, y_pred, average="macro",    zero_division=0)
+def compute_metrics(y_true, y_pred):
+    bal_acc = balanced_accuracy_score(y_true, y_pred)
+    f1_m = f1_score(y_true, y_pred, average="macro", zero_division=0)
     kappa = cohen_kappa_score(y_true, y_pred, weights='quadratic')
-
-    f1_per_class = f1_score(
-        y_true, y_pred, average=None,
-        labels=list(range(config.NUM_CLASSES)),
-        zero_division=0
-    )
+    f1_per_class = f1_score(y_true, y_pred, average=None, zero_division=0)
 
     metrics = {
-        "accuracy":       round(acc, 4),
-        "f1_weighted":    round(f1_w, 4),
-        "f1_macro":       round(f1_m, 4),
-        "cohen_kappa_Quadratic":    round(kappa, 4),
-        "f1_per_class":   {
-            config.CLASS_DISPLAY_NAMES[i]: round(f1_per_class[i], 4)
-            for i in range(config.NUM_CLASSES)
-        },
+        "balanced_accuracy": round(bal_acc, 4),
+        "f1_macro": round(f1_m, 4),
+        "cohen_kappa_Quadratic": round(kappa, 4),
+        "f1_per_class": [round(f, 4) for f in f1_per_class],
     }
 
     return metrics
@@ -93,13 +83,9 @@ def evaluate_model(model_name,model,test_loader,history,save_dir=config.RESULTS_
 
     metrics = compute_metrics(y_true, y_pred)
 
-    print(f"  Accuracy:      {metrics['accuracy']*100:.2f}%")
-    print(f"  F1 (weighted): {metrics['f1_weighted']:.4f}")
-    print(f"  F1 (macro):    {metrics['f1_macro']:.4f}")
+    print(f"  Balanced Accuracy: {metrics['balanced_accuracy']*100:.2f}%")
+    print(f"  F1 (macro):        {metrics['f1_macro']:.4f}")
     print(f"  Quadratic Cohen's Kappa: {metrics['cohen_kappa_Quadratic']:.4f}")
-    print(f"\n  F1 per class:")
-    for class_name, f1 in metrics["f1_per_class"].items():
-        print(f"    {class_name}: {f1:.4f}")
 
     report = classification_report(
         y_true, y_pred,
@@ -132,19 +118,19 @@ def evaluate_model(model_name,model,test_loader,history,save_dir=config.RESULTS_
 # =============================================================================
 
 def print_summary_table(all_metrics: list[dict]) -> None:
-    print("\n" + "=" * 80)
-    print("PODSUMOWANIE — PORÓWNANIE MODELI")
-    print("=" * 80)
-    print(f"{'Model':<25} {'Accuracy':>10} {'F1 (wgt)':>10} {'Kappa':>10}")
-    print("-" * 80)
+    print("\n" + "=" * 105)
+    print("PODSUMOWANIE POJEDYNCZYCH FOLDÓW")
+    print("=" * 105)
+    print(f"{'Model':<25} {'Kappa':>8} {'F1-Mac':>8} | {'KL0':>8} {'KL1':>8} {'KL2':>8} {'KL3':>8} {'KL4':>8}")
+    print("-" * 105)
 
     for m in sorted(all_metrics, key=lambda x: x["cohen_kappa_Quadratic"], reverse=True):
+        f1_c = m["f1_per_class"]
         print(
             f"{m['model_name']:<25} "
-            f"{m['accuracy']*100:>9.2f}% "
-            f"{m['f1_weighted']:>10.4f} "
-            f"{m['cohen_kappa_Quadratic']:>10.4f}"
+            f"{m['cohen_kappa_Quadratic']:>8.4f} "
+            f"{m['f1_macro']:>8.4f} | "
+            f"{f1_c[0]:>8.4f} {f1_c[1]:>8.4f} {f1_c[2]:>8.4f} {f1_c[3]:>8.4f} {f1_c[4]:>8.4f}"
         )
-
-    print("=" * 80)
-    print("↑ Posortowane wg Cohen's Kappa ")
+    print("=" * 105)
+    print("Posortowane wg Cohen's Kappa ")
