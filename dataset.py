@@ -37,7 +37,7 @@ def load_image_paths(data_root=config.DATA_ROOT, expert=config.EXPERT):
 
 
 # =============================================================================
-# FUNKCJA: Odcięcie żelaznego sejfu (Hold-out Test Set)
+# FUNKCJA: Hold-Out
 # =============================================================================
 def split_holdout(all_samples):
     labels = [s[1] for s in all_samples]
@@ -136,17 +136,10 @@ def build_fold_dataloaders(cv_samples, fold_idx):
 
 def get_transforms(split: str) -> A.Compose:
     """
-    Zwraca transformacje dla danego splitu (używając Albumentations).
-
-    split = "train" → augmentacja (losowe przekształcenia + CLAHE)
-    split = "val" lub "test" → tylko resize + normalize (deterministyczne!)
-
     Augmentacje dobrane dla RTG kolana:
     - Horizontal flip ✓ (kolano lewe/prawe wygląda odwrotnie, ale zmiany są symetryczne)
     - Rotation ±10° ✓ (małe obroty są realistyczne — różne ułożenie pacjenta)
     - CLAHE + Brightness/Contrast ✓ (wyciąganie detali kości i szpary stawowej, różne ekspozycje)
-    - Vertical flip ✗ NIE — kolano zawsze jest na górze/dole w określony sposób
-    - Duże skalowanie ✗ NIE — mogłoby ukryć ważne szczegóły anatomiczne
     """
     img_size = config.IMAGE_SIZE
     padding_buffer = 20
