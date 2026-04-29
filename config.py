@@ -1,4 +1,3 @@
-
 import torch
 from pathlib import Path
 
@@ -6,18 +5,35 @@ from pathlib import Path
 # ŚCIEŻKI
 # =============================================================================
 DATA_ROOT = Path("data")
-# Który ekspert medyczny jako źródło etykiet: "MedicalExpert-I" lub "MedicalExpert-II"
+# Który ekspert medyczny jako źródło etykiet KL: "MedicalExpert-I" lub "MedicalExpert-II"
 EXPERT = "MedicalExpert-I"
+# Drugi ekspert — używany do wyznaczania etykiet certain/uncertain
+EXPERT_II = "MedicalExpert-II"
+
 CHECKPOINTS_DIR = Path("checkpoints")
 RESULTS_DIR = Path("results")
 
 # =============================================================================
-# KLASY (etykiety)
+# KLASY (etykiety KL)
 # =============================================================================
-
 CLASS_NAMES = ["0Normal", "1Doubtful", "2Mild", "3Moderate", "4Severe"]
 CLASS_DISPLAY_NAMES = ["Normal", "Doubtful", "Mild", "Moderate", "Severe"]
 NUM_CLASSES = len(CLASS_NAMES)
+
+# =============================================================================
+# ETYKIETY CERTAIN / UNCERTAIN
+# =============================================================================
+# Binarne etykiety wynikające z porównania adnotacji obu ekspertów:
+#   CERTAIN_LABEL   = 0  -> eksperci zgodni (l1 == l2)
+#   UNCERTAIN_LABEL = 1  -> eksperci niezgodni (l1 != l2)
+CERTAIN_LABEL = 0
+UNCERTAIN_LABEL = 1
+AGREEMENT_CLASS_NAMES = ["Certain", "Uncertain"]
+
+# Próg niepewności ensembla:
+#   threshold = mean(std) + UNCERTAINTY_SIGMA_MULTIPLIER * std(std)
+# Zgodnie z regułą 3σ — tylko prawostronny ogon rozkładu jest flagowany jako uncertain.
+UNCERTAINTY_SIGMA_MULTIPLIER = 3
 
 # =============================================================================
 # PREPROCESSING OBRAZÓW
@@ -36,19 +52,15 @@ RANDOM_SEED = 42
 # =============================================================================
 # TRENING
 # =============================================================================
-
-BATCH_SIZE   = 32
-NUM_EPOCHS   = 20
-LEARNING_RATE = 1e-4    # Krok uczenia (Adam optimizer)
-WEIGHT_DECAY  = 1e-4    # Regularyzacja L2 (zapobiega overfittingowi)
-#early stopping
-PATIENCE = 5
+BATCH_SIZE    = 32
+NUM_EPOCHS    = 20
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY  = 1e-4
+PATIENCE      = 5
 
 # =============================================================================
 # SPRZĘT
 # =============================================================================
-
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_WORKERS = 0
 
