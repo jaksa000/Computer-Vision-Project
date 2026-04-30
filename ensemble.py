@@ -486,6 +486,68 @@ def main():
         uq_results_all.append(uq_result)
 
     # =========================================================================
+    # TEST MANN-WHITNEY U — centralny dowód statystyczny pracy (R5)
+    # =========================================================================
+    # Używamy Mega Ensemble jako głównego źródła sygnału UQ (największa liczba modeli)
+    # Jeśli brak, używamy pierwszego dostępnego ensembla
+    primary_ensemble = "Mega_Ensemble_TypD"
+    if primary_ensemble not in all_uncertainties:
+        primary_ensemble = next(iter(all_uncertainties))
+
+    unc_scores = all_uncertainties[primary_ensemble]
+    mask_certain   = expert_agreement_labels == config.CERTAIN_LABEL
+    mask_uncertain = expert_agreement_labels == config.UNCERTAIN_LABEL
+
+    print("\n\n" + "=" * 65)
+    print(f"TEST STATYSTYCZNY MANN-WHITNEY U — {primary_ensemble}")
+    print("=" * 65)
+    print("H0: std ensembla jest identyczne dla grupy certain i uncertain.")
+    print("H1: std ensembla jest wyższe dla grupy uncertain (p < 0.05).")
+
+    from evaluate import mann_whitney_uncertainty_test
+    mw_result = mann_whitney_uncertainty_test(
+        uncertainty_certain   = unc_scores[mask_certain],
+        uncertainty_uncertain = unc_scores[mask_uncertain],
+    )
+    mw_result["ensemble_name"] = primary_ensemble
+
+    mw_path = config.RESULTS_DIR / f"{primary_ensemble}_mann_whitney.json"
+    import json as _json
+    with open(mw_path, "w") as f:
+        _json.dump(mw_result, f, indent=2)
+    print(f"  Wyniki Mann-Whitney zapisane: {mw_path}")
+
+    # =========================================================================
+    # TEST MANN-WHITNEY U — centralny dowód statystyczny pracy (R5)
+    # =========================================================================
+    # Używamy Mega Ensemble jako głównego źródła sygnału UQ
+    primary_ensemble = "Mega_Ensemble_TypD"
+    if primary_ensemble not in all_uncertainties:
+        primary_ensemble = next(iter(all_uncertainties))
+
+    unc_scores     = all_uncertainties[primary_ensemble]
+    mask_certain   = expert_agreement_labels == config.CERTAIN_LABEL
+    mask_uncertain = expert_agreement_labels == config.UNCERTAIN_LABEL
+
+    print("\n\n" + "=" * 65)
+    print(f"TEST STATYSTYCZNY MANN-WHITNEY U — {primary_ensemble}")
+    print("=" * 65)
+    print("H0: std ensembla jest identyczne dla grupy certain i uncertain.")
+    print("H1: std ensembla jest wyższe dla grupy uncertain (p < 0.05).")
+
+    from evaluate import mann_whitney_uncertainty_test
+    mw_result = mann_whitney_uncertainty_test(
+        uncertainty_certain   = unc_scores[mask_certain],
+        uncertainty_uncertain = unc_scores[mask_uncertain],
+    )
+    mw_result["ensemble_name"] = primary_ensemble
+
+    mw_path = config.RESULTS_DIR / f"{primary_ensemble}_mann_whitney.json"
+    with open(mw_path, "w") as f:
+        json.dump(mw_result, f, indent=2)
+    print(f"  Wyniki Mann-Whitney zapisane: {mw_path}")
+
+    # =========================================================================
     # TABELE PODSUMOWUJĄCE
     # =========================================================================
     print_uq_summary_table(kl_metrics_all)
