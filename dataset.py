@@ -1,6 +1,7 @@
 import random
+import hashlib
 from pathlib import Path
-from collections import Counter
+from collections import Counter, defaultdict
 
 import cv2
 import albumentations as A
@@ -12,9 +13,17 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 
 import config
 
+# =============================================================================
+# HASHING FUNCTION
+# =============================================================================
+
+def get_image_hash(filepath):
+    with open(filepath, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()
+
 
 # =============================================================================
-# FUNKCJA: wczytaj ścieżki i etykiety KL z folderów jednego eksperta
+# FUNCTION- loads paths and labels from each expert
 # =============================================================================
 
 def load_image_paths(data_root=config.DATA_ROOT, expert=config.EXPERT):
@@ -28,114 +37,51 @@ def load_image_paths(data_root=config.DATA_ROOT, expert=config.EXPERT):
         ]
         for img_path in images_in_folder:
             samples.append((img_path, label_idx))
-        print(f"  Klasa {label_idx} ({class_name}): {len(images_in_folder)} obrazów")
+        print(f"  Class {label_idx} ({class_name}): {len(images_in_folder)} images")
 
-    print(f"\n  Łącznie: {len(samples)} obrazów")
+    print(f"\n  Together: {len(samples)} images")
     return samples
 
 
 # =============================================================================
-# FUNKCJA: Dual-expert labeling — certain (0) / uncertain (1)
+# FUNCTION- Dual-expert labeling (Zbudowane o HASH zamiast nazwy pliku)
 # =============================================================================
 
-def load_dual_expert_samples(
-    data_root: Path = config.DATA_ROOT,
-    expert_i: str = config.EXPERT,
-    expert_ii: str = config.EXPERT_II,
-) -> list[tuple[Path, int, int]]:
-    """
-    Dopasowuje zdjęcia z folderu Expert-I i Expert-II po nazwie pliku.
-
-    Zwraca listę trójek: (img_path, kl_label, agreement_label)
-      - img_path        : ścieżka do zdjęcia z Expert-I (używamy Expert-I jako źródła)
-      - kl_label        : etykieta KL (0–4) wg Expert-I
-      - agreement_label : config.CERTAIN_LABEL (0) jeśli eksperci zgodni,
-                          config.UNCERTAIN_LABEL (1) jeśli niezgodni
-    """
-
-    def _build_filename_map(expert_root: Path) -> dict[str, tuple[Path, int]]:
-        """Słownik: nazwa_pliku -> (pełna_ścieżka, etykieta_KL)"""
-        mapping: dict[str, tuple[Path, int]] = {}
-        for label_idx, class_name in enumerate(config.CLASS_NAMES):
-            class_folder = expert_root / class_name
-            if not class_folder.exists():
-                print(f"  UWAGA: brak folderu {class_folder}")
-                continue
-            for img_path in class_folder.iterdir():
-                if img_path.suffix.lower() == ".png":
-                    mapping[img_path.name] = (img_path, label_idx)
-        return mapping
-
-    map_i  = _build_filename_map(data_root / expert_i)
-    map_ii = _build_filename_map(data_root / expert_ii)
-
-    matched: list[tuple[Path, int, int]] = []
-    not_found_in_ii = 0
-
-    for filename, (path_i, label_i) in map_i.items():
-        if filename not in map_ii:
-            not_found_in_ii += 1
+def build_hash_map(expert_root, quiet=False):
+    mapping = {}
+    for label_idx, class_name in enumerate(config.CLASS_NAMES):
+        class_folder = expert_root / class_name
+        if not class_folder.exists():
+            if not quiet:
+                print(f" FOLDER WITH THAT NAME DOESNT EXIST {class_folder}")
             continue
-        _, label_ii = map_ii[filename]
-        agreement = (
-            config.CERTAIN_LABEL
-            if label_i == label_ii
-            else config.UNCERTAIN_LABEL
-        )
-        matched.append((path_i, label_i, agreement))
-
-    # --- Statystyki ---
-    certain_count   = sum(1 for _, _, a in matched if a == config.CERTAIN_LABEL)
-    uncertain_count = sum(1 for _, _, a in matched if a == config.UNCERTAIN_LABEL)
-    total = len(matched)
-
-    print("\n" + "=" * 60)
-    print("DUAL-EXPERT LABELING — CERTAIN vs UNCERTAIN")
-    print("=" * 60)
-    print(f"  Zdjęcia w Expert-I:            {len(map_i)}")
-    print(f"  Zdjęcia w Expert-II:           {len(map_ii)}")
-    print(f"  Dopasowane (oba eksperci):     {total}")
-    if not_found_in_ii:
-        print(f"  Pominięte (brak w Expert-II): {not_found_in_ii}")
-    print(f"\n  Pewne   (eksperci zgodni):    {certain_count:4d}  ({100*certain_count/total:.1f}%)")
-    print(f"  Niepewne (eksperci różnią się): {uncertain_count:4d}  ({100*uncertain_count/total:.1f}%)")
-
-    # Macierz niezgodności po klasach KL
-    _print_expert_confusion_matrix(matched)
-
-    return matched
+        for img_path in class_folder.iterdir():
+            if img_path.suffix.lower() == ".png":
+                file_hash = get_image_hash(img_path)
+                mapping[file_hash] = (img_path, label_idx)
+    return mapping
 
 
-def _print_expert_confusion_matrix(
-    matched: list[tuple[Path, int, int]]
-) -> None:
-    """
-    Drukuje macierz: ile razy Expert-I i Expert-II przypisali inne klasy KL.
-    Pomaga zrozumieć, między którymi stopniami KL najczęściej zachodzi niezgodność.
-    """
-    from collections import defaultdict
-    import numpy as np
+# =============================================================================
+# FUNCTION- Confusion Matrix
+# =============================================================================
+def print_expert_confusion_matrix(matched, map_1, map_2):
+    path_to_hash = {str(path): file_hash for file_hash, (path, _) in map_1.items()}
 
-    # Odbuduj parę (label_i, label_ii) dla niezgodnych
-    disagreements: dict[tuple[int, int], int] = defaultdict(int)
-
-    # Potrzebujemy label_ii — ładujemy go ponownie
-    map_ii = _build_filename_map_quiet(
-        config.DATA_ROOT / config.EXPERT_II
-    )
-
-    for path_i, label_i, agreement in matched:
+    disagreements = defaultdict(int)
+    for path_1, label_1, agreement in matched:
         if agreement == config.UNCERTAIN_LABEL:
-            filename = path_i.name
-            if filename in map_ii:
-                _, label_ii = map_ii[filename]
-                disagreements[(label_i, label_ii)] += 1
+            file_hash = path_to_hash.get(str(path_1))
+
+            if file_hash and file_hash in map_2:
+                _, label_2 = map_2[file_hash]
+                disagreements[(label_1, label_2)] += 1
 
     if not disagreements:
         return
 
-    print("\n  Macierz niezgodności (Expert-I vs Expert-II):")
-    print("  (pokazuje tylko pary z niezgodnością)")
+    print("\n  Confusion Matrix (Expert-I vs Expert-II):")
+    print("  (shows only disagreements )")
     header = "  Expert-I \\ II |" + "".join(f"  KL{j}" for j in range(config.NUM_CLASSES))
     print(header)
     print("  " + "-" * (len(header) - 2))
@@ -146,27 +92,58 @@ def _print_expert_confusion_matrix(
             print(row_str)
 
 
-def _build_filename_map_quiet(expert_root: Path) -> dict[str, tuple[Path, int]]:
-    """Wersja bez printu — używana wewnętrznie."""
-    mapping: dict[str, tuple[Path, int]] = {}
-    for label_idx, class_name in enumerate(config.CLASS_NAMES):
-        class_folder = expert_root / class_name
-        if not class_folder.exists():
+def load_dual_expert_samples(
+        data_root=config.DATA_ROOT,
+        expert_1=config.EXPERT,
+        expert_2=config.EXPERT_II,
+):
+
+    map_1 = build_hash_map(data_root / expert_1)
+    map_2 = build_hash_map(data_root / expert_2)
+
+    matched = []
+    not_found_in_2 = 0
+    for file_hash, (path_1, label_1) in map_1.items():
+        if file_hash not in map_2:
+            not_found_in_2 += 1
             continue
-        for img_path in class_folder.iterdir():
-            if img_path.suffix.lower() == ".png":
-                mapping[img_path.name] = (img_path, label_idx)
-    return mapping
+
+        _, label_2 = map_2[file_hash]
+        agreement = (
+            config.CERTAIN_LABEL
+            if label_1 == label_2
+            else config.UNCERTAIN_LABEL
+        )
+        matched.append((path_1, label_1, agreement))
+
+    # Statistics
+    certain_count = sum(1 for _, _, a in matched if a == config.CERTAIN_LABEL)
+    uncertain_count = sum(1 for _, _, a in matched if a == config.UNCERTAIN_LABEL)
+    total = len(matched)
+
+    print("\n" + "=" * 60)
+    print("DUAL-EXPERT LABELING — CERTAIN vs UNCERTAIN (HASH MATCHING)")
+    print("=" * 60)
+    print(f"  Images in Expert-I:            {len(map_1)}")
+    print(f"  Images in Expert-II:           {len(map_2)}")
+    print(f"  Images matched:                {total}")
+    if not_found_in_2:
+        print(f"  Skipped, missing in Expert-II: {not_found_in_2}")
+    print(f"\n  Certain Labels (Experts agree): {certain_count:4d}  ({100 * certain_count / total:.1f}%)")
+    print(f"  Uncertain Labels:               {uncertain_count:4d}  ({100 * uncertain_count / total:.1f}%)")
+
+    print_expert_confusion_matrix(matched, map_1, map_2)
+
+    return matched
+
 
 
 # =============================================================================
-# FUNKCJA: Hold-Out
+# FUNCTION- Data split
 # =============================================================================
 
 def split_holdout(all_samples):
-    """Przyjmuje listę (path, kl_label) LUB (path, kl_label, agreement_label)."""
     labels = [s[1] for s in all_samples]
-
     cv_samples, test_samples = train_test_split(
         all_samples,
         test_size=config.TEST_RATIO,
@@ -175,16 +152,16 @@ def split_holdout(all_samples):
     )
 
     print("\n" + "=" * 60)
-    print("PODZIAŁ NA ZBIÓR CV ORAZ HOLD-OUT (SEJF)")
+    print(" DATA SPLIT")
     print("=" * 60)
-    print(f"  Dane do K-Fold CV (85%): {len(cv_samples)} obrazów")
-    print(f"  Dane Testowe / Sejf (15%): {len(test_samples)} obrazów")
+    print(f"  K-Fold CV data (85%): {len(cv_samples)} images")
+    print(f"  Hold-out data (15%): {len(test_samples)} images")
 
     return cv_samples, test_samples
 
 
 # =============================================================================
-# FUNKCJA: Zbuduj DataLoader dla sejfu
+# FUNCTION- Data loaders
 # =============================================================================
 
 def build_test_dataloader(test_samples):
@@ -198,10 +175,6 @@ def build_test_dataloader(test_samples):
     )
     return test_loader
 
-
-# =============================================================================
-# FUNKCJA: buduj DataLoadery dla jednego folda
-# =============================================================================
 
 def build_fold_dataloaders(cv_samples, fold_idx):
     labels = [s[1] for s in cv_samples]
@@ -218,10 +191,9 @@ def build_fold_dataloaders(cv_samples, fold_idx):
     val_samples   = [cv_samples[i] for i in val_idx]
 
     print(f"\n  Fold {fold_idx + 1}/{config.NUM_FOLDS}:")
-    print(f"    Train: {len(train_samples)} obrazów")
-    print(f"    Val:   {len(val_samples)} obrazów")
+    print(f"    Train: {len(train_samples)} images")
+    print(f"    Val:   {len(val_samples)} images")
 
-    # Wagi klas liczone z części treningowej danego folda
     train_labels = [s[1] for s in train_samples]
     label_counts = Counter(train_labels)
     total = sum(label_counts.values())
@@ -231,9 +203,9 @@ def build_fold_dataloaders(cv_samples, fold_idx):
     ]
     class_weights_tensor = torch.FloatTensor(class_weights)
 
-    print(f"\n    Wagi klas (fold {fold_idx + 1}):")
+    print(f"\n    Class weights (fold {fold_idx + 1}):")
     for i, (name, w) in enumerate(zip(config.CLASS_DISPLAY_NAMES, class_weights)):
-        print(f"      Klasa {i} ({name}): waga = {w:.3f}  (count = {label_counts.get(i, 0)})")
+        print(f"      Class {i} ({name}): weight = {w:.3f}  (count = {label_counts.get(i, 0)})")
 
     train_dataset = KneeXrayDataset(train_samples, transform=get_transforms("train"))
     val_dataset   = KneeXrayDataset(val_samples,   transform=get_transforms("val"))
@@ -257,17 +229,17 @@ def build_fold_dataloaders(cv_samples, fold_idx):
 
 
 # =============================================================================
-# TRANSFORMACJE
+# FUNCTION- Normalisation and Trahsformation
 # =============================================================================
 
-def get_transforms(split: str) -> A.Compose:
+def get_transforms(split):
     img_size = config.IMAGE_SIZE
     padding_buffer = 20
 
     if split == "train":
         return A.Compose([
             A.Resize(img_size + padding_buffer, img_size + padding_buffer, interpolation=cv2.INTER_LINEAR),
-            A.Rotate(limit=10, interpolation=cv2.INTER_LINEAR, border_mode=cv2.BORDER_CONSTANT, value=0, p=0.5),
+            A.Rotate(limit=10, interpolation=cv2.INTER_LINEAR, border_mode=cv2.BORDER_CONSTANT, fill=0, p=0.5),
             A.RandomCrop(width=img_size, height=img_size),
             A.HorizontalFlip(p=0.5),
             A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=0.5),
@@ -284,25 +256,24 @@ def get_transforms(split: str) -> A.Compose:
 
 
 # =============================================================================
-# KLASA DATASET
+# Dataset Class
 # =============================================================================
 
 class KneeXrayDataset(Dataset):
     """
-    Obsługuje zarówno próbki (path, kl_label) jak i (path, kl_label, agreement_label).
-    Podczas __getitem__ zawsze zwraca (image, kl_label) — agreement_label jest
-    przechowywany oddzielnie i używany w analizie UQ po zakończeniu predykcji.
+Supports both (path, kl_label) and (path, kl_label, agreement_label) samples.
+While __getitem__ always returns (image, kl_label),
+agreement_label is stored separately and used in UQ analysis after the prediction is complete.
     """
 
-    def __init__(self, samples: list, transform=None):
+    def __init__(self, samples, transform=None):
         self.samples = samples
         self.transform = transform
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        # Próbka może być dwójką lub trójką — bierzemy pierwsze dwa elementy
+    def __getitem__(self, idx):
         img_path, label = self.samples[idx][0], self.samples[idx][1]
 
         image = cv2.imread(str(img_path))
@@ -314,22 +285,18 @@ class KneeXrayDataset(Dataset):
 
         return image, label
 
-    def get_agreement_labels(self) -> np.ndarray | None:
-        """
-        Zwraca tablicę etykiet agreement (certain/uncertain) jeśli próbki
-        zawierają tę informację (trójki). W przeciwnym razie zwraca None.
-        """
+    def get_agreement_labels(self):
         if len(self.samples) > 0 and len(self.samples[0]) == 3:
             return np.array([s[2] for s in self.samples])
         return None
 
 
 # =============================================================================
-# FUNKCJA GŁÓWNA — wczytaj wszystkie sample KL (trening/CV)
+# MAIN FUNCTION - Loading all samples
 # =============================================================================
 
 def load_all_samples(data_root=config.DATA_ROOT, expert=config.EXPERT):
-    print(f"Ładowanie danych z: {data_root / expert}")
+    print(f"Loading data: {data_root / expert}")
     all_samples = load_image_paths(data_root, expert)
-    print(f"  Łącznie: {len(all_samples)} obrazów, {config.NUM_FOLDS} foldów CV")
+    print(f"  Together: {len(all_samples)} images, {config.NUM_FOLDS}  folds CV")
     return all_samples

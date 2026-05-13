@@ -1,24 +1,10 @@
-"""
-visualize.py — wykresy do analizy UQ
-
-Generuje:
-  1. Histogram unc(x): certain vs uncertain (expert labels)
-  2. Box plot unc(x): certain vs uncertain dla każdego ensembla
-  3. Krzywa ROC dla detekcji uncertain
-  4. Wykres wpływu multiplikatora σ (1σ, 2σ, 3σ) na F1 uncertain
-
-Użycie:
-    python visualize.py
-"""
-
 from pathlib import Path
 
 import json
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from sklearn.metrics import roc_curve, f1_score
-
+from sklearn.metrics import roc_curve, f1_score,roc_auc_score
 import config
 
 
@@ -36,19 +22,10 @@ def _ensure_dir():
 
 
 # =============================================================================
-# 1. HISTOGRAM — rozkład unc(x): certain vs uncertain
+# HISTOGRAM — distribution of  unc(x): certain vs uncertain
 # =============================================================================
 
-def plot_uncertainty_histogram(
-    ensemble_name: str,
-    uncertainty_scores: np.ndarray,
-    expert_agreement_labels: np.ndarray,
-    threshold: float,
-) -> Path:
-    """
-    Nakładkowy histogram unc(x) dla grupy certain i uncertain.
-    Rysuje pionową linię progu 3σ.
-    """
+def plot_uncertainty_histogram(ensemble_name,uncertainty_scores,expert_agreement_labels,threshold):
     _ensure_dir()
 
     mask_c = expert_agreement_labels == config.CERTAIN_LABEL
@@ -68,35 +45,27 @@ def plot_uncertainty_histogram(
     )
     ax.axvline(
         threshold, color="black", linestyle="--", linewidth=1.5,
-        label=f"Próg {config.UNCERTAINTY_SIGMA_MULTIPLIER}σ = {threshold:.4f}",
+        label=f"Threshold {config.UNCERTAINTY_SIGMA_MULTIPLIER}σ = {threshold:.4f}",
     )
 
-    ax.set_xlabel("Niepewność unc(x) = mean std prawdopodobieństw ensembla", fontsize=11)
-    ax.set_ylabel("Gęstość", fontsize=11)
-    ax.set_title(f"Rozkład niepewności: {ensemble_name}", fontsize=12)
+    ax.set_xlabel("Uncertainty unc(x) = mean std of ensemble probability", fontsize=11)
+    ax.set_ylabel("Density", fontsize=11)
+    ax.set_title(f"Uncertainty distribution: {ensemble_name}", fontsize=12)
     ax.legend(fontsize=10)
     plt.tight_layout()
 
     out_path = FIGURES_DIR / f"{ensemble_name}_uncertainty_histogram.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f"  Histogram zapisany: {out_path}")
+    print(f"  Histogram saved to: {out_path}")
     return out_path
 
 
 # =============================================================================
-# 2. BOX PLOT — porównanie unc(x) dla wszystkich ensembli
+# BOX PLOT — comparison unc(x) of all ensembles
 # =============================================================================
 
-def plot_uncertainty_boxplot(
-    ensemble_names: list[str],
-    uncertainties_dict: dict[str, np.ndarray],
-    expert_agreement_labels: np.ndarray,
-) -> Path:
-    """
-    Box plot pokazujący unc(x) osobno dla grupy certain i uncertain
-    dla każdego ensembla — jeden wykres porównawczy.
-    """
+def plot_uncertainty_boxplot(ensemble_names,uncertainties_dict,expert_agreement_labels,):
     _ensure_dir()
 
     mask_c = expert_agreement_labels == config.CERTAIN_LABEL
@@ -122,33 +91,25 @@ def plot_uncertainty_boxplot(
     ax.set_xticklabels(short_names, fontsize=9)
 
     ax.set_ylabel("unc(x)", fontsize=11)
-    ax.set_title("Niepewność ensembla: certain vs uncertain (eksperci)", fontsize=12)
+    ax.set_title("Ensemble Uncertainty: certain vs uncertain (experts)", fontsize=12)
 
-    patch_c = mpatches.Patch(color=COLORS["certain"],   label="Certain (eksperci zgodni)")
-    patch_u = mpatches.Patch(color=COLORS["uncertain"], label="Uncertain (eksperci różni)")
+    patch_c = mpatches.Patch(color=COLORS["certain"],   label="Certain (experts agree)")
+    patch_u = mpatches.Patch(color=COLORS["uncertain"], label="Uncertain (experts disagree)")
     ax.legend(handles=[patch_c, patch_u], fontsize=10)
 
     plt.tight_layout()
     out_path = FIGURES_DIR / "all_ensembles_uncertainty_boxplot.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f"  Box plot zapisany: {out_path}")
+    print(f"  Box plot saved to: {out_path}")
     return out_path
 
 
 # =============================================================================
-# 3. KRZYWA ROC — detekcja uncertain
+#  ROC curve  —  uncertainty detection
 # =============================================================================
 
-def plot_roc_curves(
-    ensemble_names: list[str],
-    uncertainties_dict: dict[str, np.ndarray],
-    expert_agreement_labels: np.ndarray,
-) -> Path:
-    """
-    Krzywe ROC dla każdego ensembla — unc(x) jako score, expert-uncertain jako GT.
-    """
-    from sklearn.metrics import roc_auc_score
+def plot_roc_curves(ensemble_names,uncertainties_dict,expert_agreement_labels,):
     _ensure_dir()
 
     fig, ax = plt.subplots(figsize=(7, 6))
@@ -165,34 +126,24 @@ def plot_roc_curves(
         except ValueError:
             pass
 
-    ax.plot([0, 1], [0, 1], "k--", linewidth=1, label="Losowy klasyfikator")
+    ax.plot([0, 1], [0, 1], "k--", linewidth=1, label="Random classifier")
     ax.set_xlabel("False Positive Rate", fontsize=11)
     ax.set_ylabel("True Positive Rate", fontsize=11)
-    ax.set_title("ROC: detekcja uncertain (walidacja przez ekspertów)", fontsize=12)
+    ax.set_title("ROC:  uncertainty detection (validation by expert)", fontsize=12)
     ax.legend(fontsize=8, loc="lower right")
     plt.tight_layout()
 
     out_path = FIGURES_DIR / "roc_uncertain_detection.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f"  Krzywa ROC zapisana: {out_path}")
+    print(f" ROC curve saved to: {out_path}")
     return out_path
 
 
 # =============================================================================
-# 4. ANALIZA PROGU σ — wpływ multiplikatora na F1 uncertain
+# THRESHOLD ANALYSIS σ — the effect of the multiplier on F1 uncertain
 # =============================================================================
-
-def plot_sigma_analysis(
-    ensemble_name: str,
-    uncertainty_scores: np.ndarray,
-    expert_agreement_labels: np.ndarray,
-    sigma_range: np.ndarray | None = None,
-) -> Path:
-    """
-    Pokazuje jak zmiana multiplikatora σ wpływa na F1 uncertain i odsetek flagowanych.
-    Pomaga uzasadnić wybór 3σ.
-    """
+def plot_sigma_analysis(ensemble_name,uncertainty_scores,expert_agreement_labels,sigma_range= None ,):
     _ensure_dir()
 
     if sigma_range is None:
@@ -217,15 +168,15 @@ def plot_sigma_analysis(
 
     ax1.plot(sigma_range, f1_scores, color="#E91E63", linewidth=2, label="F1 (uncertain)")
     ax2.plot(sigma_range, pct_flagged, color="#3F51B5", linewidth=2,
-             linestyle="--", label="% flagowanych")
+             linestyle="--", label="% flagged")
 
     ax1.axvline(config.UNCERTAINTY_SIGMA_MULTIPLIER, color="black", linestyle=":",
-                linewidth=1.5, label=f"Wybrany: {config.UNCERTAINTY_SIGMA_MULTIPLIER}σ")
+                linewidth=1.5, label=f"Choosed: {config.UNCERTAINTY_SIGMA_MULTIPLIER}σ")
 
-    ax1.set_xlabel("Multiplikator σ", fontsize=11)
+    ax1.set_xlabel("Multiplier of σ", fontsize=11)
     ax1.set_ylabel("F1 (uncertain)", fontsize=11, color="#E91E63")
-    ax2.set_ylabel("% próbek flagowanych", fontsize=11, color="#3F51B5")
-    ax1.set_title(f"Wpływ progu σ na detekcję uncertain — {ensemble_name}", fontsize=12)
+    ax2.set_ylabel("% flagged samples", fontsize=11, color="#3F51B5")
+    ax1.set_title(f"The influence of the σ threshold on detection of uncertainn — {ensemble_name}", fontsize=12)
 
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
@@ -235,53 +186,39 @@ def plot_sigma_analysis(
     out_path = FIGURES_DIR / f"{ensemble_name}_sigma_analysis.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f"  Analiza σ zapisana: {out_path}")
+    print(f"  Analysis saved to: {out_path}")
     return out_path
 
 
 # =============================================================================
-# SKRYPT GŁÓWNY — generuj wszystkie wykresy z zapisanych plików .npz
+# Main Function
 # =============================================================================
 
 def main():
     _ensure_dir()
-
-    # Wczytaj etykiety ekspertów z hold-outu
-    # Zakładamy, że ensemble.py zapisał je jako expert_labels.npy
     expert_labels_path = config.RESULTS_DIR / "expert_agreement_labels.npy"
     if not expert_labels_path.exists():
-        print(f"Brak pliku {expert_labels_path}.")
-        print("Uruchom najpierw ensemble.py, który zapisuje etykiety ekspertów.")
+        print(f"Missing file {expert_labels_path}.")
         return
 
     expert_agreement_labels = np.load(expert_labels_path)
-    print(f"Wczytano {len(expert_agreement_labels)} etykiet ekspertów.")
+    print(f"Loaded {len(expert_agreement_labels)} experts labels.")
     print(f"  Certain:   {(expert_agreement_labels == config.CERTAIN_LABEL).sum()}")
     print(f"  Uncertain: {(expert_agreement_labels == config.UNCERTAIN_LABEL).sum()}")
 
-    # Wczytaj niepewności dla każdego ensembla
     uncertainties: dict[str, np.ndarray] = {}
     for npz_path in sorted(config.RESULTS_DIR.glob("*_uncertainty.npz")):
         ensemble_name = npz_path.stem.replace("_uncertainty", "")
         data = np.load(npz_path)
         uncertainties[ensemble_name] = data["uncertainty"]
-        print(f"  Wczytano unc(x) dla: {ensemble_name} ({len(data['uncertainty'])} próbek)")
-
-    if not uncertainties:
-        print("Brak plików *_uncertainty.npz. Uruchom ensemble.py.")
-        return
-
+        print(f"  Loaded unc(x) for: {ensemble_name} ({len(data['uncertainty'])} samples")
     ensemble_names = list(uncertainties.keys())
 
-    # --- Zbiorczy box plot ---
     plot_uncertainty_boxplot(ensemble_names, uncertainties, expert_agreement_labels)
 
-    # --- Zbiorczy ROC ---
     plot_roc_curves(ensemble_names, uncertainties, expert_agreement_labels)
 
-    # --- Per-ensemble: histogram + analiza σ ---
     for name, unc in uncertainties.items():
-        # Wczytaj próg z JSON
         uq_json = config.RESULTS_DIR / f"{name}_uq_detection.json"
         if uq_json.exists():
             with open(uq_json) as f:
@@ -294,7 +231,7 @@ def main():
         plot_uncertainty_histogram(name, unc, expert_agreement_labels, threshold)
         plot_sigma_analysis(name, unc, expert_agreement_labels)
 
-    print(f"\nWszystkie wykresy zapisane w: {FIGURES_DIR}")
+    print(f"\n All figures saved to: {FIGURES_DIR}")
 
 
 if __name__ == "__main__":

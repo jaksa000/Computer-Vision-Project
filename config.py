@@ -2,70 +2,66 @@ import torch
 from pathlib import Path
 
 # =============================================================================
-# ŚCIEŻKI
+# File Paths
 # =============================================================================
 DATA_ROOT = Path("data")
-# Który ekspert medyczny jako źródło etykiet KL: "MedicalExpert-I" lub "MedicalExpert-II"
+# Which expert is source of labels
 EXPERT = "MedicalExpert-I"
-# Drugi ekspert — używany do wyznaczania etykiet certain/uncertain
+# Second expert used to designate certain/uncertain
 EXPERT_II = "MedicalExpert-II"
 
 CHECKPOINTS_DIR = Path("checkpoints")
 RESULTS_DIR = Path("results")
 
 # =============================================================================
-# KLASY (etykiety KL)
+# Classes
 # =============================================================================
 CLASS_NAMES = ["0Normal", "1Doubtful", "2Mild", "3Moderate", "4Severe"]
 CLASS_DISPLAY_NAMES = ["Normal", "Doubtful", "Mild", "Moderate", "Severe"]
 NUM_CLASSES = len(CLASS_NAMES)
 
 # =============================================================================
-# ETYKIETY CERTAIN / UNCERTAIN
+# CERTAIN / UNCERTAIN Labels
 # =============================================================================
-# Binarne etykiety wynikające z porównania adnotacji obu ekspertów:
-#   CERTAIN_LABEL   = 0  -> eksperci zgodni (l1 == l2)
-#   UNCERTAIN_LABEL = 1  -> eksperci niezgodni (l1 != l2)
-CERTAIN_LABEL = 0
-UNCERTAIN_LABEL = 1
+CERTAIN_LABEL = 0   # CERTAIN_LABEL   = 0  when both experts agree on label (l1 == l2)
+UNCERTAIN_LABEL = 1 # UNCERTAIN_LABEL = 1  when both experts disagree about label  (l1 != l2)
 AGREEMENT_CLASS_NAMES = ["Certain", "Uncertain"]
 
-# Próg niepewności ensembla:
+# Ensemble Uncertainty treshold
 #   threshold = mean(std) + UNCERTAINTY_SIGMA_MULTIPLIER * std(std)
-# Zgodnie z regułą 3σ — tylko prawostronny ogon rozkładu jest flagowany jako uncertain.
-UNCERTAINTY_SIGMA_MULTIPLIER = 3
+UNCERTAINTY_SIGMA_MULTIPLIER = 3  # 3 sigma rule
 
 # =============================================================================
-# PREPROCESSING OBRAZÓW
+# Image Preprocessing
 # =============================================================================
 IMAGE_SIZE = 224
 NORMALIZE_MEAN = [0.485, 0.456, 0.406]
 NORMALIZE_STD  = [0.229, 0.224, 0.225]
 
 # =============================================================================
-# PODZIAŁ DANYCH
+# Data split, folds number and random seed
 # =============================================================================
 TEST_RATIO  = 0.15
 NUM_FOLDS   = 5
-RANDOM_SEED = 42
+RANDOM_SEED = 123
 
 # =============================================================================
-# TRENING
+#  Training
 # =============================================================================
-BATCH_SIZE    = 32
+BATCH_SIZE    = 64
 NUM_EPOCHS    = 20
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY  = 1e-4
 PATIENCE      = 5
 
 # =============================================================================
-# SPRZĘT
+#  Use gpu with cuda capability if possible
 # =============================================================================
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-NUM_WORKERS = 0
+NUM_WORKERS = 2
 
 # =============================================================================
-# MODELE DO TRENOWANIA
+# Models
 # =============================================================================
 MODELS_CONFIG = [
     {

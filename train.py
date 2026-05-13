@@ -12,7 +12,7 @@ import config
 
 
 # =============================================================================
-# PĘTLA JEDNEJ EPOKI — TRENING
+# ONE EPOCH TRAINING
 # =============================================================================
 
 def train_one_epoch(model, loader, criterion, optimizer):
@@ -86,8 +86,7 @@ def evaluate(model, loader, criterion):
 def train_model(model_name, model,train_loader,val_loader,class_weights,):
 
     print("\n" + "=" * 60)
-    print(f"TRENING: {model_name}")
-    print(f"Device: {config.DEVICE}")
+    print(f"TRAINING: {model_name}")
     print("=" * 60)
 
     criterion = nn.CrossEntropyLoss(
@@ -121,50 +120,45 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
     }
 
     best_val_loss    = float("inf")
-    epochs_no_improve = 0  # Licznik do early stopping
+    epochs_no_improve = 0
+
+    # =====================================================================
+    # MAIN TRAINING LOOP
+    # =====================================================================
 
     with open(log_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["epoch", "train_loss", "train_bal_acc", "train_f1", "val_loss", "val_bal_acc", "val_f1", "lr"])
-
-        # =====================================================================
-        # GŁÓWNA PĘTLA TRENINGOWA
-        # =====================================================================
         for epoch in range(1, config.NUM_EPOCHS + 1):
             epoch_start = time.time()
-
-            # --- Trening ---
+            # TRAINING
             train_loss, train_bal_acc, train_f1 = train_one_epoch(
                 model, train_loader, criterion, optimizer
             )
-
-            # --- Walidacja ---
+            # VALIDATION
             val_loss, val_bal_acc, val_f1 = evaluate(
                 model, val_loader, criterion
             )
-
-            # --- Aktualizuj scheduler ---
+            # FINAL TUNING IF LOSS DOESNT DECREASE
             scheduler.step(val_loss)
             current_lr = optimizer.param_groups[0]["lr"]
 
-            # --- Zapisz do historii ---
+            # SAVIING DATA TO FILE
             history["train_loss"].append(train_loss)
             history["train_bal_acc"].append(train_bal_acc)
             history["train_f1"].append(train_f1)
             history["val_loss"].append(val_loss)
             history["val_bal_acc"].append(val_bal_acc)
             history["val_f1"].append(val_f1)
-
-            # --- Zaloguj do CSV ---
             writer.writerow([
                 epoch,
                 f"{train_loss:.4f}",    f"{train_bal_acc:.4f}", f"{train_f1:.4f}",
                 f"{val_loss:.4f}",      f"{val_bal_acc:.4f}",   f"{val_f1:.4f}",
                 f"{current_lr:.6f}",
             ])
-            f.flush()  # Zapisz od razu (nie czekaj na zamknięcie pliku)
+            f.flush()
 
-            # --- Print do konsoli ---
+
             elapsed = time.time() - epoch_start
             print(
                 f"Epoch [{epoch:3d}/{config.NUM_EPOCHS}]  "
@@ -173,12 +167,11 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
                 f"LR: {current_lr:.2e}  ({elapsed:.1f}s)"
             )
 
-            # --- Checkpoint: zapisz jeśli najlepsza walidacja ---
+            # CHECKPOINT
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 epochs_no_improve = 0
 
-                # Zapisz pełny stan modelu
                 torch.save({
                     "epoch":      epoch,
                     "model_name": model_name,
@@ -193,13 +186,13 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
             else:
                 epochs_no_improve += 1
 
-            # --- Early stopping ---
+            # EARLY STOPPING
             if epochs_no_improve >= config.PATIENCE:
                 print(f"\n  Early stopping due to lack of improvement {config.PATIENCE} epoch.")
                 print(f"  Best val_loss: {best_val_loss:.4f}")
                 break
 
-    print(f"\n Trening finished. Checkpoint: {checkpoint_path}")
+    print(f"\n Training finished. Checkpoint: {checkpoint_path}")
     print(f"Log CSV: {log_path}")
 
     checkpoint = torch.load(checkpoint_path, map_location=config.DEVICE, weights_only=False)
