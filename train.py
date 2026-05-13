@@ -87,7 +87,7 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
 
     print("\n" + "=" * 60)
     print(f"TRENING: {model_name}")
-    print(f"Urządzenie: {config.DEVICE}")
+    print(f"Device: {config.DEVICE}")
     print("=" * 60)
 
     criterion = nn.CrossEntropyLoss(
@@ -167,7 +167,7 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
             # --- Print do konsoli ---
             elapsed = time.time() - epoch_start
             print(
-                f"Epoka [{epoch:3d}/{config.NUM_EPOCHS}]  "
+                f"Epoch [{epoch:3d}/{config.NUM_EPOCHS}]  "
                 f"Train Loss: {train_loss:.4f}  Bal.Acc: {train_bal_acc*100:.1f}%  F1: {train_f1:.4f}  |  "
                 f"Val Loss: {val_loss:.4f}  Bal.Acc: {val_bal_acc*100:.1f}%  F1: {val_f1:.4f}  |  "
                 f"LR: {current_lr:.2e}  ({elapsed:.1f}s)"
@@ -189,21 +189,21 @@ def train_model(model_name, model,train_loader,val_loader,class_weights,):
                     "val_f1":       val_f1,
                 }, checkpoint_path)
 
-                print(f"  ✓ Zapisano najlepszy checkpoint (val_loss: {best_val_loss:.4f})")
+                print(f" Best checkpoint saved (val_loss: {best_val_loss:.4f})")
             else:
                 epochs_no_improve += 1
 
             # --- Early stopping ---
             if epochs_no_improve >= config.PATIENCE:
-                print(f"\n  Early stopping: brak poprawy przez {config.PATIENCE} epok.")
-                print(f"  Najlepsza val_loss: {best_val_loss:.4f}")
+                print(f"\n  Early stopping due to lack of improvement {config.PATIENCE} epoch.")
+                print(f"  Best val_loss: {best_val_loss:.4f}")
                 break
 
-    print(f"\nTrening zakończony. Checkpoint: {checkpoint_path}")
+    print(f"\n Trening finished. Checkpoint: {checkpoint_path}")
     print(f"Log CSV: {log_path}")
 
-    checkpoint = torch.load(checkpoint_path, map_location=config.DEVICE)
+    checkpoint = torch.load(checkpoint_path, map_location=config.DEVICE, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
-    print(f"Załadowano najlepsze wagi z epoki {checkpoint['epoch']}")
+    print(f"Best weights loaded from  {checkpoint['epoch']}")
 
     return history
