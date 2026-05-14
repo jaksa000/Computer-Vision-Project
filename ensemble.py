@@ -11,7 +11,7 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
 )
-
+from collections import defaultdict
 import config
 from models import build_model
 from dataset import load_all_samples, load_dual_expert_samples, split_holdout, build_test_dataloader
@@ -30,7 +30,7 @@ class SimpleEnsemble(nn.Module):
     @torch.no_grad()
     def forward(self, x, return_std=False):
         all_probs = [torch.softmax(model(x), dim=1) for model in self.models]
-        stacked_probs = torch.stack(all_probs)  # [N_models, batch, num_classes]
+        stacked_probs = torch.stack(all_probs)
         avg_probs = torch.mean(stacked_probs, dim=0)
 
         if return_std:
@@ -212,16 +212,43 @@ def build_class_specific_ensembles():
 
     # Version 1: Best of the best with allowed repetitions
     best_with_rep = np.argmax(f1_matrix, axis=0).tolist()
+    arch_to_indices = defaultdict(list)
 
-    # Version 2: Diverse ensemble, unique specialists (chosen using Hungarian algorithm)
-    row_ind, col_ind = linear_sum_assignment(-f1_matrix)
-    best_without_rep = row_ind[np.argsort(col_ind)].tolist()
+    for idx, name in enumerate(model_names):
+        arch_name = name.rsplit("_f", 1)[0]
+        arch_to_indices[arch_name].append(idx)
+
+    arch_list = list(arch_to_indices.keys())
+    num_archs = len(arch_list)
+    arch_f1_matrix = np.zeros((num_archs, config.NUM_CLASSES))
+    arch_best_model_idx = np.zeros((num_archs, config.NUM_CLASSES), dtype=int)
+
+    for arch_idx, arch_name in enumerate(arch_list):
+        indices = arch_to_indices[arch_name]
+        for c in range(config.NUM_CLASSES):
+            best_f1 = -1
+            best_idx = -1
+            for idx in indices:
+                if f1_matrix[idx, c] > best_f1:
+                    best_f1 = f1_matrix[idx, c]
+                    best_idx = idx
+
+            arch_f1_matrix[arch_idx, c] = best_f1
+            arch_best_model_idx[arch_idx, c] = best_idx
+
+    row_ind, col_ind = linear_sum_assignment(-arch_f1_matrix)
+    best_without_rep = [0] * config.NUM_CLASSES
+    for i in range(len(col_ind)):
+        c = col_ind[i]
+        arch_idx = row_ind[i]
+        best_without_rep[c] = int(arch_best_model_idx[arch_idx, c])
+    # =========================================================================
 
     print("\n  Version 1: Best of the best with allowed repetitions:")
     for c, idx in enumerate(best_with_rep):
         print(f"    KL{c}: {model_names[idx]:<22} (F1: {f1_matrix[idx, c]:.4f})")
 
-    print("\n  Version 2: Diverse ensemble, unique specialists:")
+    print("\n  Version 2: Diverse ensemble, unique specialists (one per architecture):")
     for c, idx in enumerate(best_without_rep):
         print(f"    KL{c}: {model_names[idx]:<22} (F1: {f1_matrix[idx, c]:.4f})")
 
