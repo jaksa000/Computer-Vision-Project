@@ -495,10 +495,10 @@ def main():
     all_dual_samples = load_dual_expert_samples()
     _, test_dual_samples = split_holdout(all_dual_samples)
 
-    test_loader = build_test_dataloader(test_dual_samples)
-    expert_agreement_labels = np.array([s[2] for s in test_dual_samples])
+    test_loader = build_test_dataloader(all_dual_samples)
+    expert_agreement_labels = np.array([s[2] for s in all_dual_samples])
 
-    print(f"\nHold-out: {len(test_dual_samples)} samples")
+    print(f"\n UQ Evaluation on whole dataset: {len(all_dual_samples)} samples")
     print(f"  Expert-certain:   {(expert_agreement_labels == config.CERTAIN_LABEL).sum()}")
     print(f"  Expert-uncertain: {(expert_agreement_labels == config.UNCERTAIN_LABEL).sum()}")
 
