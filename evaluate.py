@@ -169,7 +169,7 @@ def mann_whitney_uncertainty_test(uncertainty_certain,uncertainty_uncertain,):
 def evaluate_model(model_name,model,test_loader,history,save_dir = config.RESULTS_DIR,):
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nEwaluacja modelu: {model_name}")
+    print(f"\nModel evaluation: {model_name}")
     print("-" * 40)
 
     y_true, y_pred, y_probs = get_predictions(model, test_loader)

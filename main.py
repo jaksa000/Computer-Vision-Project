@@ -78,7 +78,7 @@ def main():
             gc.collect()
         cv_results[model_name] = model_metrics
         kappas = [m["cohen_kappa_Quadratic"] for m in model_metrics]
-        print(f"\n✅ FINISHED: {model_name}. Average kappa out of 5 folds: {np.mean(kappas):.4f} ±{np.std(kappas):.4f}")
+        print(f"\n FINISHED: {model_name}. Average kappa out of 5 folds: {np.mean(kappas):.4f} ±{np.std(kappas):.4f}")
     all_metrics = [m for folds in cv_results.values() for m in folds]
     print_summary_table(all_metrics)
     print_cv_summary(cv_results)

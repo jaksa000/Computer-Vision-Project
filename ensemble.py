@@ -2,6 +2,7 @@ import json
 import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import (
@@ -91,7 +92,7 @@ class ClassSpecificEnsemble(nn.Module):
 
 
 # =============================================================================
-# Buliding Ensembles
+# Building Ensembles
 # =============================================================================
 
 def load_best_fold_for_model(model_cfg):
@@ -119,7 +120,7 @@ def load_best_fold_for_model(model_cfg):
 
 def build_homogeneous_ensemble(model_cfg):
     model_name = model_cfg["name"]
-    print(f"\n Building Homogenus Ensemble for : {model_name}")
+    print(f"\n Building Homogeneous Ensemble for : {model_name}")
     loaded_models = []
     for fold_idx in range(config.NUM_FOLDS):
         checkpoint_path = config.CHECKPOINTS_DIR / f"{model_name}_fold{fold_idx + 1}_best.pt"
@@ -188,7 +189,7 @@ def build_class_specific_ensembles():
     f1_matrix = []
     model_names = []
 
-    # Loading all models  i and their f1 scores foe each class
+    # Loading all models i and their f1 scores foe each class
     for model_cfg in config.MODELS_CONFIG:
         model_name = model_cfg["name"]
         for fold_idx in range(config.NUM_FOLDS):
@@ -212,7 +213,7 @@ def build_class_specific_ensembles():
     # Version 1: Best of the best with allowed repetitions
     best_with_rep = np.argmax(f1_matrix, axis=0).tolist()
 
-    # Version 2: Diverse ensemble, unique specialists (choosed using hungarian algorithm)
+    # Version 2: Diverse ensemble, unique specialists (chosen using Hungarian algorithm)
     row_ind, col_ind = linear_sum_assignment(-f1_matrix)
     best_without_rep = row_ind[np.argsort(col_ind)].tolist()
 
@@ -220,7 +221,7 @@ def build_class_specific_ensembles():
     for c, idx in enumerate(best_with_rep):
         print(f"    KL{c}: {model_names[idx]:<22} (F1: {f1_matrix[idx, c]:.4f})")
 
-    print("\n   Version 2: Diverse ensemble, unique specialists:")
+    print("\n  Version 2: Diverse ensemble, unique specialists:")
     for c, idx in enumerate(best_without_rep):
         print(f"    KL{c}: {model_names[idx]:<22} (F1: {f1_matrix[idx, c]:.4f})")
 
@@ -236,7 +237,7 @@ def build_class_specific_ensembles():
 
 
 # =============================================================================
-# 3. Ensemble evaluation with ucertainty per sample
+# 3. Ensemble evaluation with uncertainty per sample
 # =============================================================================
 
 @torch.no_grad()
@@ -266,12 +267,9 @@ def evaluate_ensemble(ensemble_name, ensemble_model, test_loader):
     metrics["model_name"] = ensemble_name
     metrics["uq_mean_uncertainty"] = float(np.mean(uncertainty))
 
-    with open(config.RESULTS_DIR / f"{ensemble_name}_metrics.json", "w") as f:
-        json.dump(metrics, f, indent=2)
-
     npz_path = config.RESULTS_DIR / f"{ensemble_name}_uncertainty.npz"
     np.savez(npz_path, y_true=y_true, y_pred=y_pred, uncertainty=uncertainty)
-    print(f"  Uncertainty per sample saved to : {npz_path}")
+    print(f"  Uncertainty per sample saved to: {npz_path}")
 
     return metrics, uncertainty, y_true, y_pred
 
@@ -280,7 +278,7 @@ def evaluate_ensemble(ensemble_name, ensemble_model, test_loader):
 # Threshold designation
 # =============================================================================
 
-def compute_uncertainty_threshold( uncertainty_scores,sigma_multiplier = config.UNCERTAINTY_SIGMA_MULTIPLIER,):
+def compute_uncertainty_threshold(uncertainty_scores, sigma_multiplier=config.UNCERTAINTY_SIGMA_MULTIPLIER, ):
     mean_unc = float(np.mean(uncertainty_scores))
     std_unc = float(np.std(uncertainty_scores))
     threshold = mean_unc + sigma_multiplier * std_unc
@@ -299,7 +297,7 @@ def compute_uncertainty_threshold( uncertainty_scores,sigma_multiplier = config.
 # UQ validation
 # =============================================================================
 
-def evaluate_uncertainty_detection(ensemble_name,uncertainty_scores,expert_agreement_labels, threshold,):
+def evaluate_uncertainty_detection(ensemble_name, uncertainty_scores, expert_agreement_labels, threshold, ):
     ensemble_flags = (uncertainty_scores > threshold).astype(int)
 
     try:
@@ -348,12 +346,12 @@ def evaluate_uncertainty_detection(ensemble_name,uncertainty_scores,expert_agree
     print(f"  F1 (uncertain class):            {f1_uncertain:.4f}")
     print(f"\n  average unc(x):")
     print(f"    Certain   (experts agree):   {mean_unc_certain:.4f}")
-    print(f"    Uncertain (exoerts disagree):    {mean_unc_uncertain:.4f}")
+    print(f"    Uncertain (experts disagree):    {mean_unc_uncertain:.4f}")
     print(f"\n  Confusion Matrix [Certain/Uncertain]:")
     print(f"    Predicted →     Certain  Uncertain")
     print(f"    True Certain:   {cm[0, 0]:6d}   {cm[0, 1]:6d}")
     print(f"    True Uncertain: {cm[1, 0]:6d}   {cm[1, 1]:6d}")
-    print(f"\n  CLassification report:")
+    print(f"\n  Classification report:")
     print(classification_report(
         expert_agreement_labels,
         ensemble_flags,
@@ -362,21 +360,58 @@ def evaluate_uncertainty_detection(ensemble_name,uncertainty_scores,expert_agree
         zero_division=0,
     ))
 
-    uq_json_path = config.RESULTS_DIR / f"{ensemble_name}_uq_detection.json"
-    with open(uq_json_path, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"  UQ results saved to: {uq_json_path}")
-
     return results
 
 
 # =============================================================================
-# SUMMARY TABLES
+# EXCEL EXPORT (Pandas)
+# =============================================================================
+
+def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_result):
+    print("\n" + "=" * 65)
+    print(" SAVING RESULTS TO EXCEL (PANDAS)")
+    print("=" * 65)
+
+    # 1. KL Classification
+    df_kl = pd.DataFrame(kl_metrics_all)
+    if "f1_per_class" in df_kl.columns:
+        f1_splits = pd.DataFrame(df_kl['f1_per_class'].tolist(),
+                                 columns=['F1_KL0', 'F1_KL1', 'F1_KL2', 'F1_KL3', 'F1_KL4'])
+        df_kl = pd.concat([df_kl.drop('f1_per_class', axis=1), f1_splits], axis=1)
+
+    # 2. UQ Detection
+    df_uq = pd.DataFrame(uq_results_all)
+    if "confusion_matrix" in df_uq.columns:
+        df_uq['TN (Certain_ok)'] = df_uq['confusion_matrix'].apply(
+            lambda x: x[0][0] if isinstance(x, list) and len(x) > 0 else 0)
+        df_uq['FP (False_Uncertain)'] = df_uq['confusion_matrix'].apply(
+            lambda x: x[0][1] if isinstance(x, list) and len(x) > 0 else 0)
+        df_uq['FN (Missed_Uncertain)'] = df_uq['confusion_matrix'].apply(
+            lambda x: x[1][0] if isinstance(x, list) and len(x) > 1 else 0)
+        df_uq['TP (True_Uncertain)'] = df_uq['confusion_matrix'].apply(
+            lambda x: x[1][1] if isinstance(x, list) and len(x) > 1 else 0)
+        df_uq = df_uq.drop('confusion_matrix', axis=1)
+
+    # 3. Mann-Whitney
+    df_mw = pd.DataFrame([mw_result])
+
+    excel_path = config.RESULTS_DIR / "MASTER_RESULTS_SUMMARY.xlsx"
+    with pd.ExcelWriter(excel_path) as writer:
+        df_kl.to_excel(writer, sheet_name="KL_Classification", index=False)
+        df_uq.to_excel(writer, sheet_name="UQ_Detection", index=False)
+        df_mw.to_excel(writer, sheet_name="Mann_Whitney_Test", index=False)
+
+    print(f" All tables compiled successfully to:")
+    print(f"  {excel_path}")
+
+
+# =============================================================================
+# SUMMARY TABLES (Terminal)
 # =============================================================================
 
 def print_uq_summary_table(all_kl_metrics: list[dict]) -> None:
     print("\n\n" + "=" * 105)
-    print(" KL CLassificaion Results — Ensembles tested on HOLD-OUT")
+    print(" KL Classification Results — Ensembles tested on HOLD-OUT")
     print("=" * 105)
     print(f"{'Model':<28} {'Kappa':>8} {'F1-Mac':>8} | {'UQ-Mean':>8} | "
           f"{'KL0':>6} {'KL1':>6} {'KL2':>6} {'KL3':>6} {'KL4':>6}")
@@ -449,7 +484,7 @@ def main():
     all_uncertainties: dict[str, np.ndarray] = {}
 
     # =========================================================================
-    # Building ane evaluating each ensemble
+    # Building and evaluating each ensemble
     # =========================================================================
 
     for model_cfg in config.MODELS_CONFIG:
@@ -482,7 +517,7 @@ def main():
     del mega_ensemble
     torch.cuda.empty_cache()
 
-    # --- NOWE KOMITETY (CLASS-SPECIFIC) ---
+
     v1_ensemble, v2_ensemble = build_class_specific_ensembles()
 
     metrics, uncertainty, _, _ = evaluate_ensemble("Class_Specific_With_Rep", v1_ensemble, test_loader)
@@ -532,7 +567,7 @@ def main():
     print(f" MANN-WHITNEY U Statistical test — {primary_ensemble}")
     print("=" * 65)
     print("H0: Ensemble std is identical for certain and uncertain.")
-    print("H1: Ensemble std is higher uncertain group (p < 0.05).")
+    print("H1: Ensemble std is higher for uncertain group (p < 0.05).")
 
     from evaluate import mann_whitney_uncertainty_test
     mw_result = mann_whitney_uncertainty_test(
@@ -541,18 +576,13 @@ def main():
     )
     mw_result["ensemble_name"] = primary_ensemble
 
-    mw_path = config.RESULTS_DIR / f"{primary_ensemble}_mann_whitney.json"
-    with open(mw_path, "w") as f:
-        json.dump(mw_result, f, indent=2)
-    print(f" Mann-Whitney Results saved to: {mw_path}")
+    # =========================================================================
+    # Summary EXCEL Export & Terminal Output
+    # =========================================================================
+    save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_result)
 
-    # =========================================================================
-    # Summary Tables
-    # =========================================================================
     print_uq_summary_table(kl_metrics_all)
     print_uq_detection_table(uq_results_all)
-
-    print("\n Results saved to:", config.RESULTS_DIR)
 
 
 if __name__ == "__main__":
