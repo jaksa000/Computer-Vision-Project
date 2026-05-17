@@ -40,7 +40,7 @@ def get_predictions(model, loader):
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     bal_acc      = balanced_accuracy_score(y_true, y_pred)
-    f1_macro         = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    f1_macro     = f1_score(y_true, y_pred, average="macro", zero_division=0)
     kappa        = cohen_kappa_score(y_true, y_pred, weights="quadratic")
     f1_per_class = f1_score(y_true, y_pred, average=None, zero_division=0)
 
@@ -53,7 +53,7 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 
 # =============================================================================
-# FUNCTION- CALIBRATION METRICS
+# FUNCTION — CALIBRATION METRICS
 # =============================================================================
 
 def compute_calibration_metrics(
@@ -62,20 +62,18 @@ def compute_calibration_metrics(
     n_bins: int = 10,
 ) -> dict:
     """
-    Probabilistic Calibration Metrics:
+    ECE (Expected Calibration Error):
+        Average gap between model confidence and actual accuracy across bins.
+        Lower is better. Depends on bin count.
 
-    ECE (Expected Calibration Error)
-    The average error between model confidence and actual accuracy in the buckets.
-    Lower = better calibrated.
-
-    Brier Score (multiclass, averaged One-vs-Rest)
-    Proper Scoring Rule: MSE(softmax_vector, one_hot_true).
-    Lower = better calibrated. Range [0, 2].
+    Brier Score (multiclass, One-vs-Rest averaged):
+        MSE(softmax_vector, one_hot_true). Proper Scoring Rule.
+        Lower is better. Range [0, 2].
     """
 
     # ECE
-    confidences  = np.max(y_probs, axis=1)
-    correct      = (np.argmax(y_probs, axis=1) == y_true).astype(float)
+    confidences = np.max(y_probs, axis=1)
+    correct     = (np.argmax(y_probs, axis=1) == y_true).astype(float)
 
     bins = np.linspace(0.0, 1.0, n_bins + 1)
     ece  = 0.0
@@ -89,7 +87,7 @@ def compute_calibration_metrics(
         bin_conf = confidences[mask].mean()
         ece += (mask.sum() / n) * abs(bin_acc - bin_conf)
 
-    #Brier Score (One-vs-Rest, averaged across classes)
+    # Brier Score (One-vs-Rest, averaged across classes)
     brier_per_class = []
     for cls in range(config.NUM_CLASSES):
         y_true_bin = (y_true == cls).astype(int)
@@ -99,74 +97,77 @@ def compute_calibration_metrics(
     brier_mean = float(np.mean(brier_per_class))
 
     return {
-        "ece":                round(float(ece), 4),
-        "brier_score_mean":   round(brier_mean, 4),
-        "brier_per_class":    [round(float(b), 4) for b in brier_per_class],
+        "ece":               round(float(ece), 4),
+        "brier_score_mean":  round(brier_mean, 4),
+        "brier_per_class":   [round(float(b), 4) for b in brier_per_class],
     }
 
 
 # =============================================================================
-# FUNCTION- MANN-WHITNEY TEST
+# FUNCTION — MANN-WHITNEY U TEST
 # =============================================================================
 
-def mann_whitney_uncertainty_test(uncertainty_certain,uncertainty_uncertain,):
+def mann_whitney_uncertainty_test(uncertainty_certain, uncertainty_uncertain):
     """
-    Two-sided Mann-Whitney U test to determine whether uncertain samples (according to experts)
-    have significantly higher unc(x) than certain samples.
+    One-sided Mann-Whitney U test: do expert-uncertain samples have
+    significantly higher unc(x) than expert-certain samples?
 
-    H0: The standard distributions are identical for both groups.
-    H1: The standard distribution is higher for the uncertain group.
+    H0: distributions identical for both groups.
+    H1: unc(x) stochastically higher for the uncertain group.
 
-    Reports:
-    - U-statistic
-    - p-value (one-sided, alternative='less' → testing whether certain < uncertain)
-    - effect size: rank-biserial correlation r = 1 - 2U / (n1 * n2)
-    r ≈ 0.1 small, 0.3 medium, 0.5 large (Cohen convention)
+    Reports U-statistic, p-value, and rank-biserial correlation r as effect size.
+    r ≈ 0.1 small, 0.3 medium, 0.5 large (Cohen convention).
     """
     n1 = len(uncertainty_certain)
     n2 = len(uncertainty_uncertain)
 
-    # alternative='less': testing H1: certain < uncertain (one-sided)
+    # alternative='less': H1 is that certain < uncertain (one-sided)
     stat, p_value = mannwhitneyu(
         uncertainty_certain,
         uncertainty_uncertain,
         alternative="less",
     )
 
-    # rank-biserial correlation as effect size
-    r_effect = 1.0 - (2.0 * float(stat)) / (n1 * n2)
-
+    r_effect   = 1.0 - (2.0 * float(stat)) / (n1 * n2)
     significant = p_value < 0.05
 
+    effect_label = (
+        "large" if abs(r_effect) >= 0.5 else
+        "medium" if abs(r_effect) >= 0.3 else
+        "small"
+    )
+
     result = {
-        "test":            "Mann-Whitney U (one-sided: certain < uncertain)",
-        "U_statistic":     round(float(stat), 2),
-        "p_value":         round(float(p_value), 6),
-        "p_significant":   significant,
-        "effect_size_r":   round(r_effect, 4),
-        "n_certain":       n1,
-        "n_uncertain":     n2,
-        "interpretation":  (
-            f"p={p_value:.4f} {'< 0.05  statistically significant differencee' if significant else '>= 0.05 statistically insignificant difference'}, "
-            f"r={r_effect:.3f} ({'big' if abs(r_effect) >= 0.5 else 'average' if abs(r_effect) >= 0.3 else 'small'} efect)"
+        "test":           "Mann-Whitney U (one-sided: certain < uncertain)",
+        "U_statistic":    round(float(stat), 2),
+        "p_value":        round(float(p_value), 6),
+        "p_significant":  significant,
+        "effect_size_r":  round(r_effect, 4),
+        "n_certain":      n1,
+        "n_uncertain":    n2,
+        "interpretation": (
+            f"p={p_value:.4f} "
+            f"{'< 0.05 — statistically significant difference' if significant else '>= 0.05 — statistically insignificant difference'}, "
+            f"r={r_effect:.3f} ({effect_label} effect)"
         ),
     }
 
-    print(f"\n  Test Mann-Whitney U (certain vs uncertain):")
+    print(f"\n  Mann-Whitney U test (certain vs uncertain):")
     print(f"    n_certain   = {n1}")
     print(f"    n_uncertain = {n2}")
     print(f"    U           = {stat:.2f}")
-    print(f"    p-value     = {p_value:.6f}  {'Significant (p < 0.05)' if significant else 'Insignificant'}")
-    print(f"    effect r    = {r_effect:.4f}  ({'big' if abs(r_effect) >= 0.5 else 'average' if abs(r_effect) >= 0.3 else 'small'} efect)")
+    print(f"    p-value     = {p_value:.6f}  "
+          f"{'Significant (p < 0.05)' if significant else 'Not significant (p >= 0.05)'}")
+    print(f"    effect r    = {r_effect:.4f}  ({effect_label} effect)")
 
     return result
 
 
 # =============================================================================
-# Main evaluation function
+# Main evaluation function (used by main.py for single-model CV evaluation)
 # =============================================================================
 
-def evaluate_model(model_name,model,test_loader,history,save_dir = config.RESULTS_DIR,):
+def evaluate_model(model_name, model, test_loader, history, save_dir=config.RESULTS_DIR):
     save_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\nModel evaluation: {model_name}")
@@ -174,10 +175,7 @@ def evaluate_model(model_name,model,test_loader,history,save_dir = config.RESULT
 
     y_true, y_pred, y_probs = get_predictions(model, test_loader)
 
-    # Classification metrics
-    metrics = compute_metrics(y_true, y_pred)
-
-    # Calibration metrics
+    metrics     = compute_metrics(y_true, y_pred)
     calibration = compute_calibration_metrics(y_true, y_probs)
     metrics.update(calibration)
 
@@ -196,7 +194,6 @@ def evaluate_model(model_name,model,test_loader,history,save_dir = config.RESULT
 
     metrics["model_name"] = model_name
 
-
     json_path = save_dir / f"{model_name}_metrics.json"
     with open(json_path, "w") as f:
         json.dump(metrics, f, indent=2)
@@ -204,13 +201,13 @@ def evaluate_model(model_name,model,test_loader,history,save_dir = config.RESULT
 
     probs_path = save_dir / f"{model_name}_test_probs.npz"
     np.savez(probs_path, y_true=y_true, y_pred=y_pred, y_probs=y_probs)
-    print(f"  Probability saved to: {probs_path}")
+    print(f"  Probabilities saved to: {probs_path}")
 
     return metrics
 
 
 # =============================================================================
-# All folds summary for all models
+# Cross-validation summary
 # =============================================================================
 
 def print_summary_table(all_metrics):
@@ -224,8 +221,8 @@ def print_summary_table(all_metrics):
     print("-" * 120)
 
     for m in sorted(all_metrics, key=lambda x: x["cohen_kappa_Quadratic"], reverse=True):
-        f1_c = m["f1_per_class"]
-        ece   = m.get("ece", float("nan"))
+        f1_c  = m["f1_per_class"]
+        ece   = m.get("ece",              float("nan"))
         brier = m.get("brier_score_mean", float("nan"))
         print(
             f"{m['model_name']:<25} "
