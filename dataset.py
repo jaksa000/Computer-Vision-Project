@@ -1,3 +1,4 @@
+import csv
 import hashlib
 from pathlib import Path
 from collections import Counter, defaultdict
@@ -26,17 +27,17 @@ except AttributeError:
 
 
 def _image_to_vector(path: Path) -> np.ndarray:
+    """
+    Load image, apply EXIF orientation, convert to grayscale,
+    resize to 128×128, return flat float32 vector in [0, 1].
+    Invariant to PNG metadata differences between expert folders.
+    """
     with Image.open(path) as img:
         img = ImageOps.exif_transpose(img)
         img = img.convert("L")
         img = img.resize(_MATCH_SIZE, _RESAMPLE)
         arr = np.asarray(img, dtype=np.float32) / 255.0
         return arr.flatten()
-
-
-def _mse(a: np.ndarray, b: np.ndarray) -> float:
-    diff = a - b
-    return float(np.mean(diff * diff))
 
 
 # =============================================================================
@@ -60,23 +61,19 @@ def load_image_paths(data_root=config.DATA_ROOT, expert=config.EXPERT):
 
 
 # =============================================================================
-# FUNCTION — dual-expert labelling via MSE-based Hungarian image matching
+# FUNCTION — dual-expert labelling via Hungarian image matching
 #
 # Strategy:
 #   1. Load every image from both expert folders as a 128×128 grayscale vector.
-#   2. Compute the full pairwise MSE cost matrix using an optimized dot-product
-#      expansion to drastically save CPU cycles and prevent RAM overflow.
-#   3. Solve the linear sum assignment problem (Hungarian algorithm) to find the
+#   2. Compute the full pairwise MSE cost matrix using a dot-product expansion
+#      to avoid allocating a large 3-D array.
+#   3. Solve the linear sum assignment problem (Hungarian / Kuhn-Munkres) for a
 #      globally optimal, order-independent bijective mapping between experts.
 #   4. If both experts placed the matched pair in the same KL class → CERTAIN.
 #      If they placed it in different KL classes → UNCERTAIN.
 #
-# Why MSE and not MD5 hashing?
-#   File-byte MD5 fails when the same radiograph is stored with different PNG
-#   metadata (timestamps, software tags, compression settings) across folders.
-#   Pixel-level MD5 can similarly fail after EXIF rotation or colour-profile
-#   normalisation. The MSE approach is robust to all of these because it
-#   matches on visual content, not on byte identity.
+# The result is cached to a CSV file (config.MATCH_CACHE_CSV).  On subsequent
+# runs the cache is loaded directly, avoiding the O(N²) image-decoding step.
 # =============================================================================
 
 def _load_expert_records(expert_root: Path):
@@ -91,41 +88,67 @@ def _load_expert_records(expert_root: Path):
                 continue
             try:
                 vec = _image_to_vector(img_path)
-                records.append({
-                    "path": img_path,
-                    "label": label_idx,
-                    "vector": vec,
-                })
+                records.append({"path": img_path, "label": label_idx, "vector": vec})
             except Exception as e:
                 print(f"  WARNING: could not load {img_path}: {e}")
     return records
 
 
 def _hungarian_match(records_a, records_b):
-    A = np.stack([r["vector"] for r in records_a])
-    B = np.stack([r["vector"] for r in records_b])
+    """
+    Build pairwise MSE cost matrix and solve with the Hungarian algorithm.
+    Uses the identity ||a-b||² = ||a||² + ||b||² - 2·a·bᵀ for efficiency.
+    """
+    A_mat = np.stack([r["vector"] for r in records_a])   # [N_a, D]
+    B_mat = np.stack([r["vector"] for r in records_b])   # [N_b, D]
 
-    # Efficient matrix-based pairwise MSE computation: (||A||^2 + ||B||^2 - 2AB^T) / D
-    # This prevents allocating massive 3D arrays and keeps memory footprint minimal
-    A_sq = np.sum(A ** 2, axis=1, keepdims=True)
-    B_sq = np.sum(B ** 2, axis=1, keepdims=True).T
-    AB_prod = np.dot(A, B.T)
+    D            = A_mat.shape[1]
+    A_sq         = np.sum(A_mat ** 2, axis=1, keepdims=True)       # [N_a, 1]
+    B_sq         = np.sum(B_mat ** 2, axis=1, keepdims=True).T     # [1, N_b]
+    cost_matrix  = (A_sq + B_sq - 2.0 * np.dot(A_mat, B_mat.T)) / float(D)
 
-    D_features = A.shape[1]
-    cost_matrix = (A_sq + B_sq - 2.0 * AB_prod) / float(D_features)
-
-    # Global linear sum assignment optimization (Kuhn-Munkres)
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-    matches = []
-    for r, c in zip(row_ind, col_ind):
-        matches.append((records_a[r], records_b[c], float(cost_matrix[r, c])))
-    return matches
+    return [
+        (records_a[r], records_b[c], float(cost_matrix[r, c]))
+        for r, c in zip(row_ind, col_ind)
+    ]
 
 
-# =============================================================================
-# FUNCTION — expert confusion matrix (disagreements only)
-# =============================================================================
+def _save_cache(matches, cache_path: Path):
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["path_a", "label_a", "path_b", "label_b", "mse"])
+        for rec_a, rec_b, mse in matches:
+            writer.writerow([str(rec_a["path"]), rec_a["label"],
+                             str(rec_b["path"]), rec_b["label"],
+                             f"{mse:.10f}"])
+    print(f"  Match cache saved: {cache_path}")
+
+
+def _load_cache(cache_path: Path):
+    """
+    Returns list of (path_a, label_a, agreement_label) triples,
+    or None if the cache file does not exist.
+    """
+    if not cache_path.exists():
+        return None
+
+    samples = []
+    with open(cache_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            label_a   = int(row["label_a"])
+            label_b   = int(row["label_b"])
+            agreement = (
+                config.CERTAIN_LABEL
+                if label_a == label_b
+                else config.UNCERTAIN_LABEL
+            )
+            samples.append((Path(row["path_a"]), label_a, agreement))
+    return samples
+
 
 def _print_expert_confusion_matrix(matched_triples):
     disagreements = defaultdict(int)
@@ -147,31 +170,47 @@ def _print_expert_confusion_matrix(matched_triples):
             print(f"  KL{i}          |" + "".join(f"  {v:3d}" for v in row))
 
 
-# =============================================================================
-# FUNCTION — main dual-expert loading entry point
-# =============================================================================
-
 def load_dual_expert_samples(
         data_root=config.DATA_ROOT,
         expert_1=config.EXPERT,
         expert_2=config.EXPERT_II,
+        cache_path=config.MATCH_CACHE_CSV,
+        force_rematch=False,
 ):
-    root_1 = data_root / expert_1
-    root_2 = data_root / expert_2
+    """
+    Returns list of triples: (path_expert1, kl_label, agreement_label).
 
+    On first call the Hungarian matching runs and the result is written to
+    cache_path.  All subsequent calls load from that CSV, skipping the
+    image-decoding and optimisation step entirely.
+    Pass force_rematch=True to bypass the cache and rerun matching.
+    """
+    # --- Try cache first ---
+    if not force_rematch:
+        cached = _load_cache(cache_path)
+        if cached is not None:
+            certain   = sum(1 for _, _, a in cached if a == config.CERTAIN_LABEL)
+            uncertain = sum(1 for _, _, a in cached if a == config.UNCERTAIN_LABEL)
+            print(f"\n  Loaded {len(cached)} matched pairs from cache: {cache_path}")
+            print(f"  Certain: {certain}  Uncertain: {uncertain}")
+            return cached
+
+    # --- Full matching ---
     print("\n" + "=" * 60)
-    print("DUAL-EXPERT LABELLING — MSE-based Hungarian image matching")
+    print("DUAL-EXPERT LABELLING — Hungarian image matching (128×128 MSE)")
     print("=" * 60)
     print(f"  Loading Expert-I  ({expert_1})...")
-    records_a = _load_expert_records(root_1)
+    records_a = _load_expert_records(data_root / expert_1)
     print(f"  Loading Expert-II ({expert_2})...")
-    records_b = _load_expert_records(root_2)
+    records_b = _load_expert_records(data_root / expert_2)
 
     print(f"\n  Expert-I images:  {len(records_a)}")
     print(f"  Expert-II images: {len(records_b)}")
-    print(f"  Matching (globally optimal Hungarian algorithm on {_MATCH_SIZE[0]}x{_MATCH_SIZE[1]} grayscale)...")
+    print("  Running Hungarian algorithm (globally optimal assignment)...")
 
     matches = _hungarian_match(records_a, records_b)
+    _save_cache(matches, cache_path)
+
     matched_samples = []
     for rec_a, rec_b, _ in matches:
         agreement = (
@@ -181,16 +220,15 @@ def load_dual_expert_samples(
         )
         matched_samples.append((rec_a["path"], rec_a["label"], agreement))
 
-    certain_count = sum(1 for _, _, a in matched_samples if a == config.CERTAIN_LABEL)
+    certain_count   = sum(1 for _, _, a in matched_samples if a == config.CERTAIN_LABEL)
     uncertain_count = sum(1 for _, _, a in matched_samples if a == config.UNCERTAIN_LABEL)
-    total = len(matched_samples)
+    total           = len(matched_samples)
 
-    print(f"\n  Images matched:                 {total}")
-    print(f"  Certain  (experts agree):       {certain_count:4d}  ({100 * certain_count / total:.1f}%)")
-    print(f"  Uncertain (experts disagree):   {uncertain_count:4d}  ({100 * uncertain_count / total:.1f}%)")
+    print(f"\n  Images matched:               {total}")
+    print(f"  Certain  (experts agree):     {certain_count:4d}  ({100*certain_count/total:.1f}%)")
+    print(f"  Uncertain (experts disagree): {uncertain_count:4d}  ({100*uncertain_count/total:.1f}%)")
 
     _print_expert_confusion_matrix(matches)
-
     return matched_samples
 
 
@@ -219,9 +257,8 @@ def split_holdout(all_samples):
 # =============================================================================
 
 def build_test_dataloader(test_samples):
-    test_dataset = KneeXrayDataset(test_samples, transform=get_transforms("val"))
     return DataLoader(
-        test_dataset,
+        KneeXrayDataset(test_samples, transform=get_transforms("val")),
         batch_size=config.BATCH_SIZE,
         shuffle=False,
         num_workers=config.NUM_WORKERS,
@@ -231,23 +268,20 @@ def build_test_dataloader(test_samples):
 
 def build_fold_dataloaders(cv_samples, fold_idx):
     labels = [s[1] for s in cv_samples]
-    skf = StratifiedKFold(
-        n_splits=config.NUM_FOLDS,
-        shuffle=True,
-        random_state=config.RANDOM_SEED,
-    )
-    splits = list(skf.split(cv_samples, labels))
-    train_idx, val_idx = splits[fold_idx]
-    train_samples = [cv_samples[i] for i in train_idx]
-    val_samples = [cv_samples[i] for i in val_idx]
+    skf    = StratifiedKFold(n_splits=config.NUM_FOLDS, shuffle=True,
+                              random_state=config.RANDOM_SEED)
+    splits                 = list(skf.split(cv_samples, labels))
+    train_idx, val_idx     = splits[fold_idx]
+    train_samples          = [cv_samples[i] for i in train_idx]
+    val_samples            = [cv_samples[i] for i in val_idx]
 
     print(f"\n  Fold {fold_idx + 1}/{config.NUM_FOLDS}:")
     print(f"    Train: {len(train_samples)} images")
     print(f"    Val:   {len(val_samples)} images")
 
-    train_labels = [s[1] for s in train_samples]
-    label_counts = Counter(train_labels)
-    total = sum(label_counts.values())
+    train_labels  = [s[1] for s in train_samples]
+    label_counts  = Counter(train_labels)
+    total         = sum(label_counts.values())
     class_weights = [
         total / (config.NUM_CLASSES * label_counts.get(i, 1))
         for i in range(config.NUM_CLASSES)
@@ -256,25 +290,17 @@ def build_fold_dataloaders(cv_samples, fold_idx):
 
     print(f"\n    Class weights (fold {fold_idx + 1}):")
     for i, (name, w) in enumerate(zip(config.CLASS_DISPLAY_NAMES, class_weights)):
-        print(f"      Class {i} ({name}): weight = {w:.3f}  "
-              f"(count = {label_counts.get(i, 0)})")
-
-    train_dataset = KneeXrayDataset(train_samples, transform=get_transforms("train"))
-    val_dataset = KneeXrayDataset(val_samples, transform=get_transforms("val"))
+        print(f"      Class {i} ({name}): weight = {w:.3f}  (count = {label_counts.get(i, 0)})")
 
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=True,
-        num_workers=config.NUM_WORKERS,
-        pin_memory=True,
+        KneeXrayDataset(train_samples, transform=get_transforms("train")),
+        batch_size=config.BATCH_SIZE, shuffle=True,
+        num_workers=config.NUM_WORKERS, pin_memory=True,
     )
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=False,
-        num_workers=config.NUM_WORKERS,
-        pin_memory=True,
+        KneeXrayDataset(val_samples, transform=get_transforms("val")),
+        batch_size=config.BATCH_SIZE, shuffle=False,
+        num_workers=config.NUM_WORKERS, pin_memory=True,
     )
     return train_loader, val_loader, class_weights_tensor
 
@@ -284,7 +310,7 @@ def build_fold_dataloaders(cv_samples, fold_idx):
 # =============================================================================
 
 def get_transforms(split):
-    img_size = config.IMAGE_SIZE
+    img_size       = config.IMAGE_SIZE
     padding_buffer = 20
 
     if split == "train":
@@ -314,8 +340,14 @@ def get_transforms(split):
 # =============================================================================
 
 class KneeXrayDataset(Dataset):
+    """
+    Supports both (path, kl_label) and (path, kl_label, agreement_label) tuples.
+    __getitem__ always returns (image_tensor, kl_label).
+    agreement_label is accessible via get_agreement_labels() for UQ analysis.
+    """
+
     def __init__(self, samples, transform=None):
-        self.samples = samples
+        self.samples   = samples
         self.transform = transform
 
     def __len__(self):
@@ -323,14 +355,11 @@ class KneeXrayDataset(Dataset):
 
     def __getitem__(self, idx):
         img_path = self.samples[idx][0]
-        label = self.samples[idx][1]
-
-        image = cv2.imread(str(img_path))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
+        label    = self.samples[idx][1]
+        image    = cv2.imread(str(img_path))
+        image    = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         if self.transform:
             image = self.transform(image=image)["image"]
-
         return image, label
 
     def get_agreement_labels(self):
@@ -340,7 +369,7 @@ class KneeXrayDataset(Dataset):
 
 
 # =============================================================================
-# MAIN FUNCTION — simple single-expert loading (used by main.py for training)
+# MAIN FUNCTION — single-expert loading used by main.py for training
 # =============================================================================
 
 def load_all_samples(data_root=config.DATA_ROOT, expert=config.EXPERT):

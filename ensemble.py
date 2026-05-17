@@ -3,11 +3,11 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import (
     classification_report,
     roc_auc_score,
+    average_precision_score,
     confusion_matrix,
     f1_score,
 )
@@ -15,12 +15,8 @@ from collections import defaultdict
 import config
 from models import build_model
 from dataset import load_dual_expert_samples, split_holdout, build_test_dataloader
-from evaluate import compute_metrics
+from evaluate import compute_metrics, compute_calibration_metrics
 
-
-# =============================================================================
-# Ensemble classes
-# =============================================================================
 
 class SimpleEnsemble(nn.Module):
     def __init__(self, models_list):
@@ -29,493 +25,423 @@ class SimpleEnsemble(nn.Module):
 
     @torch.no_grad()
     def forward(self, x, return_std=False):
-        all_probs = [torch.softmax(model(x), dim=1) for model in self.models]
-        stacked_probs = torch.stack(all_probs)
-        avg_probs = torch.mean(stacked_probs, dim=0)
+        all_probs = [torch.softmax(m(x), dim=1) for m in self.models]
+        stacked = torch.stack(all_probs)
+        avg_probs = torch.mean(stacked, dim=0)
         if return_std:
-            std_probs = torch.std(stacked_probs, dim=0, unbiased=False)
-            return avg_probs, std_probs
+            return avg_probs, torch.std(stacked, dim=0, unbiased=False)
         return avg_probs
 
 
 class WeightedEnsemble(nn.Module):
     def __init__(self, models_list, weight_matrix):
         super().__init__()
-        self.models  = nn.ModuleList(models_list)
-        self.weights = torch.tensor(weight_matrix, dtype=torch.float32).to(config.DEVICE)
-        row_sums     = self.weights.sum(dim=0, keepdim=True)
-        self.weights = self.weights / (row_sums + 1e-8)
+        self.models = nn.ModuleList(models_list)
+        w = torch.tensor(weight_matrix, dtype=torch.float32).to(config.DEVICE)
+        self.weights = w / (w.sum(dim=0, keepdim=True) + 1e-8)
 
     @torch.no_grad()
     def forward(self, x, return_std=False):
-        all_probs     = [torch.softmax(model(x), dim=1) for model in self.models]
-        stacked_probs = torch.stack(all_probs)
-        w             = self.weights.unsqueeze(1)
-        weighted_probs = torch.sum(stacked_probs * w, dim=0)
+        all_probs = [torch.softmax(m(x), dim=1) for m in self.models]
+        stacked = torch.stack(all_probs)
+        weighted = torch.sum(stacked * self.weights.unsqueeze(1), dim=0)
         if return_std:
-            std_probs = torch.std(stacked_probs, dim=0, unbiased=False)
-            return weighted_probs, std_probs
-        return weighted_probs
-
-
-class ClassSpecificEnsemble(nn.Module):
-    """
-    Mixture-of-Experts: each KL class gets a specialist model for prediction.
-    Uncertainty (std) is always computed from ALL 25 models so it is directly
-    comparable with the Mega Ensemble's UQ signal.
-    """
-
-    def __init__(self, all_models_list, expert_indices):
-        super().__init__()
-        self.expert_indices = expert_indices
-        self.models = nn.ModuleList(all_models_list)
-
-    @torch.no_grad()
-    def forward(self, x, return_std=False):
-        all_probs     = [torch.softmax(model(x), dim=1) for model in self.models]
-        stacked_probs = torch.stack(all_probs)   # [N_models, batch, 5]
-
-        batch_size  = x.size(0)
-        num_classes = len(self.expert_indices)
-        fused_probs = torch.zeros((batch_size, num_classes), device=x.device)
-        for c, model_idx in enumerate(self.expert_indices):
-            fused_probs[:, c] = stacked_probs[model_idx, :, c]
-        fused_probs = fused_probs / (fused_probs.sum(dim=1, keepdim=True) + 1e-8)
-
-        if return_std:
-            std_probs = torch.std(stacked_probs, dim=0, unbiased=False)
-            return fused_probs, std_probs
-        return fused_probs
-
-
-# =============================================================================
-# Building ensembles
-# =============================================================================
-
-def load_best_fold_for_model(model_cfg):
-    model_name = model_cfg["name"]
-    best_kappa, best_fold, best_metrics = -1, -1, None
-    for fold_idx in range(config.NUM_FOLDS):
-        json_path = config.RESULTS_DIR / f"{model_name}_fold{fold_idx + 1}_metrics.json"
-        if json_path.exists():
-            with open(json_path) as f:
-                metrics = json.load(f)
-            if metrics["cohen_kappa_Quadratic"] > best_kappa:
-                best_kappa   = metrics["cohen_kappa_Quadratic"]
-                best_fold    = fold_idx + 1
-                best_metrics = metrics
-    if best_fold == -1:
-        raise FileNotFoundError(f"No checkpoint data found for {model_name}.")
-    checkpoint_path = config.CHECKPOINTS_DIR / f"{model_name}_fold{best_fold}_best.pt"
-    model = build_model(model_cfg)
-    ckpt  = torch.load(checkpoint_path, map_location=config.DEVICE, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model.eval()
-    return model, best_metrics, best_fold
+            return weighted, torch.std(stacked, dim=0, unbiased=False)
+        return weighted
 
 
 def _load_checkpoint(model_cfg, fold_idx):
-    checkpoint_path = config.CHECKPOINTS_DIR / f"{model_cfg['name']}_fold{fold_idx + 1}_best.pt"
     model = build_model(model_cfg)
-    ckpt  = torch.load(checkpoint_path, map_location=config.DEVICE, weights_only=False)
+    ckpt = torch.load(
+        config.CHECKPOINTS_DIR / f"{model_cfg['name']}_fold{fold_idx + 1}_best.pt",
+        map_location=config.DEVICE, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     return model
 
 
+def _load_best_fold(model_cfg):
+    best_kappa, best_fold, best_metrics = -1, -1, None
+    for fold_idx in range(config.NUM_FOLDS):
+        jp = config.INDIVIDUAL_MODELS_DIR / f"{model_cfg['name']}_fold{fold_idx + 1}_metrics.json"
+        if jp.exists():
+            with open(jp) as f:
+                m = json.load(f)
+            if m["cohen_kappa_Quadratic"] > best_kappa:
+                best_kappa, best_fold, best_metrics = (
+                    m["cohen_kappa_Quadratic"], fold_idx + 1, m)
+    if best_fold == -1:
+        raise FileNotFoundError(f"No checkpoint found for {model_cfg['name']}.")
+    return _load_checkpoint(model_cfg, best_fold - 1), best_metrics, best_fold
+
+
 def build_homogeneous_ensemble(model_cfg):
     print(f"\n Building Homogeneous Ensemble: {model_cfg['name']}")
-    models   = [_load_checkpoint(model_cfg, i) for i in range(config.NUM_FOLDS)]
-    ensemble = SimpleEnsemble(models)
-    return ensemble.to(config.DEVICE).eval()
+    return SimpleEnsemble(
+        [_load_checkpoint(model_cfg, i) for i in range(config.NUM_FOLDS)]
+    ).to(config.DEVICE).eval()
 
 
 def build_heterogeneous_ensemble():
     print("\n Building Heterogeneous Ensemble (best fold per architecture)")
-    models   = [load_best_fold_for_model(cfg)[0] for cfg in config.MODELS_CONFIG]
-    ensemble = SimpleEnsemble(models)
-    return ensemble.to(config.DEVICE).eval()
+    return SimpleEnsemble(
+        [_load_best_fold(cfg)[0] for cfg in config.MODELS_CONFIG]
+    ).to(config.DEVICE).eval()
 
 
 def build_weighted_ensemble():
-    print("\n Building Weighted Ensemble (MoE, F1-based weights)")
+    print("\n Building Weighted Ensemble (per-class F1 weights)")
     models, weights = [], []
     for cfg in config.MODELS_CONFIG:
-        model, best_metrics, _ = load_best_fold_for_model(cfg)
+        model, best_metrics, _ = _load_best_fold(cfg)
         models.append(model)
         weights.append(best_metrics["f1_per_class"])
-    ensemble = WeightedEnsemble(models, weights)
-    return ensemble.to(config.DEVICE).eval()
+    return WeightedEnsemble(models, weights).to(config.DEVICE).eval()
 
 
 def build_mega_ensemble():
-    print("\n Building MEGA ENSEMBLE (Type D — 25 models)")
+    print("\n Building Mega Ensemble (Type D — 25 models)")
     all_models = []
     for cfg in config.MODELS_CONFIG:
         for fold_idx in range(config.NUM_FOLDS):
-            ckpt_path = config.CHECKPOINTS_DIR / f"{cfg['name']}_fold{fold_idx + 1}_best.pt"
-            if ckpt_path.exists():
+            cp = config.CHECKPOINTS_DIR / f"{cfg['name']}_fold{fold_idx + 1}_best.pt"
+            if cp.exists():
                 all_models.append(_load_checkpoint(cfg, fold_idx))
-    ensemble = SimpleEnsemble(all_models)
-    return ensemble.to(config.DEVICE).eval()
+    print(f"  Loaded {len(all_models)} models.")
+    return SimpleEnsemble(all_models).to(config.DEVICE).eval()
 
-
-def build_class_specific_ensembles():
-    print("\n Building CLASS-SPECIFIC ENSEMBLES (Type E and F)")
-    all_models, f1_matrix, model_names = [], [], []
-
-    for cfg in config.MODELS_CONFIG:
-        for fold_idx in range(config.NUM_FOLDS):
-            json_path = config.RESULTS_DIR / f"{cfg['name']}_fold{fold_idx + 1}_metrics.json"
-            ckpt_path = config.CHECKPOINTS_DIR / f"{cfg['name']}_fold{fold_idx + 1}_best.pt"
-            if json_path.exists() and ckpt_path.exists():
-                with open(json_path) as f:
-                    metrics = json.load(f)
-                f1_matrix.append(metrics["f1_per_class"])
-                model_names.append(f"{cfg['name']}_f{fold_idx + 1}")
-                all_models.append(_load_checkpoint(cfg, fold_idx))
-
-    f1_matrix = np.array(f1_matrix)   # [25, 5]
-
-    # Type E: best model per class, repetitions allowed
-    best_with_rep = np.argmax(f1_matrix, axis=0).tolist()
-
-    # Type F: unique architecture per class (Hungarian algorithm)
-    arch_to_indices = defaultdict(list)
-    for idx, name in enumerate(model_names):
-        arch_to_indices[name.rsplit("_f", 1)[0]].append(idx)
-
-    arch_list           = list(arch_to_indices.keys())
-    arch_f1_matrix      = np.zeros((len(arch_list), config.NUM_CLASSES))
-    arch_best_model_idx = np.zeros((len(arch_list), config.NUM_CLASSES), dtype=int)
-
-    for ai, arch_name in enumerate(arch_list):
-        for c in range(config.NUM_CLASSES):
-            scores = [(f1_matrix[idx, c], idx) for idx in arch_to_indices[arch_name]]
-            best_f1, best_idx = max(scores)
-            arch_f1_matrix[ai, c]      = best_f1
-            arch_best_model_idx[ai, c] = best_idx
-
-    row_ind, col_ind = linear_sum_assignment(-arch_f1_matrix)
-    best_without_rep = [0] * config.NUM_CLASSES
-    for i in range(len(col_ind)):
-        best_without_rep[col_ind[i]] = int(arch_best_model_idx[row_ind[i], col_ind[i]])
-
-    print("\n  Type E — Best specialist per class (repetitions allowed):")
-    for c, idx in enumerate(best_with_rep):
-        print(f"    KL{c}: {model_names[idx]:<22} (F1: {f1_matrix[idx, c]:.4f})")
-    print("\n  Type F — Unique architecture per class (Hungarian):")
-    for c, idx in enumerate(best_without_rep):
-        print(f"    KL{c}: {model_names[idx]:<22} (F1: {f1_matrix[idx, c]:.4f})")
-
-    v1 = ClassSpecificEnsemble(all_models, best_with_rep)
-    v2 = ClassSpecificEnsemble(all_models, best_without_rep)
-    return v1.to(config.DEVICE).eval(), v2.to(config.DEVICE).eval()
-
-
-# =============================================================================
-# Core inference helper
-# =============================================================================
 
 @torch.no_grad()
 def _run_forward(ensemble_model, loader):
-    all_labels, all_preds, all_unc = [], [], []
+    all_labels, all_preds, all_probs = [], [], []
+    all_unc_mean, all_unc_max, all_entropy = [], [], []
+
     for images, labels in loader:
         images = images.to(config.DEVICE)
         avg_probs, std_probs = ensemble_model(images, return_std=True)
         _, preds = torch.max(avg_probs, dim=1)
+
+        unc_mean = std_probs.mean(dim=1)
+        unc_max = std_probs.max(dim=1)[0]
+        entropy = -(avg_probs * torch.log(avg_probs + 1e-8)).sum(dim=1)
+
         all_labels.extend(labels.cpu().numpy())
         all_preds.extend(preds.cpu().numpy())
-        all_unc.extend(std_probs.mean(dim=1).cpu().numpy())
-    return np.array(all_labels), np.array(all_preds), np.array(all_unc)
+        all_probs.extend(avg_probs.cpu().numpy())
+        all_unc_mean.extend(unc_mean.cpu().numpy())
+        all_unc_max.extend(unc_max.cpu().numpy())
+        all_entropy.extend(entropy.cpu().numpy())
+
+    return (
+        np.array(all_labels),
+        np.array(all_preds),
+        np.array(all_probs),
+        np.array(all_unc_mean),
+        np.array(all_unc_max),
+        np.array(all_entropy),
+    )
 
 
-# =============================================================================
-# Threshold computation — calibrated on CV set (training-side, ~1402 samples)
-#
-# This is the methodologically correct approach: the decision boundary is set
-# using data that was never part of the final holdout evaluation.  Using the
-# holdout itself to set the threshold would constitute information leakage
-# into the test-set reporting.
-# =============================================================================
+def compute_thresholds_from_cv(mega_ensemble, cv_loader):
+    pct = config.UNCERTAINTY_PERCENTILE
+    print(f"\n Computing uncertainty thresholds from CV set ({pct}th percentile)...")
 
-def compute_uncertainty_threshold_from_cv(ensemble_model, cv_loader,
-                                          sigma_multiplier=config.UNCERTAINTY_SIGMA_MULTIPLIER):
-    print(f"\n  Computing uncertainty threshold from CV set ({sigma_multiplier}σ)...")
-    _, _, cv_unc = _run_forward(ensemble_model, cv_loader)
+    _, _, _, unc_mean_cv, unc_max_cv, entropy_cv = _run_forward(mega_ensemble, cv_loader)
 
-    mean_unc  = float(np.mean(cv_unc))
-    std_unc   = float(np.std(cv_unc))
-    threshold = mean_unc + sigma_multiplier * std_unc
+    thresholds = {
+        "unc_mean": float(np.percentile(unc_mean_cv, pct)),
+        "unc_max": float(np.percentile(unc_max_cv, pct)),
+        "entropy": float(np.percentile(entropy_cv, pct)),
+        "percentile_used": pct,
+        "cv_samples": len(unc_mean_cv),
+        "source": "Mega Ensemble forward pass on CV set (training-side data)",
+    }
 
-    print(f"    CV samples used: {len(cv_unc)}")
-    print(f"    mean(unc):       {mean_unc:.6f}")
-    print(f"    std(unc):        {std_unc:.6f}")
-    print(f"    threshold:       {threshold:.6f}  (mean + {sigma_multiplier}σ)")
-    return threshold, mean_unc, std_unc
+    print(f"    CV samples:          {len(unc_mean_cv)}")
+    print(f"    Threshold unc_mean:  {thresholds['unc_mean']:.6f}")
+    print(f"    Threshold unc_max:   {thresholds['unc_max']:.6f}")
+    print(f"    Threshold entropy:   {thresholds['entropy']:.6f}")
+
+    path = config.ENSEMBLES_DIR / "uq_thresholds.json"
+    with open(path, "w") as f:
+        json.dump(thresholds, f, indent=2)
+    print(f"    Thresholds saved: {path}")
+
+    return thresholds
 
 
-# =============================================================================
-# Ensemble evaluation
-#
-#   KL classification metrics  →  holdout_loader  (clean, never seen in training)
-#   Threshold calibration      →  cv_loader       (training-side, ~1402 samples)
-#   UQ / uncertainty analysis  →  full_loader     (all 1650 images)
-# =============================================================================
-
-def evaluate_ensemble(ensemble_name, ensemble_model,
-                      holdout_loader, full_loader, cv_loader):
+def evaluate_ensemble(ensemble_name, ensemble_model, holdout_loader, full_loader):
     print(f"\nEvaluating: {ensemble_name}")
 
-    # KL classification on clean holdout
-    y_true_ho, y_pred_ho, _ = _run_forward(ensemble_model, holdout_loader)
+    y_true_ho, y_pred_ho, y_probs_ho, _, _, _ = _run_forward(ensemble_model, holdout_loader)
+
     kl_metrics = compute_metrics(y_true_ho, y_pred_ho)
+    kl_metrics.update(compute_calibration_metrics(y_true_ho, y_probs_ho))
     kl_metrics["model_name"] = ensemble_name
-    print(f"  [Holdout] Kappa: {kl_metrics['cohen_kappa_Quadratic']:.4f}  "
+
+    print(f"  [Holdout]  Kappa: {kl_metrics['cohen_kappa_Quadratic']:.4f}  "
           f"F1: {kl_metrics['f1_macro']:.4f}  "
-          f"Bal.Acc: {kl_metrics['balanced_accuracy']:.4f}")
+          f"ECE: {kl_metrics['ece']:.4f}  "
+          f"Brier: {kl_metrics['brier_score_mean']:.4f}")
 
-    # Threshold from CV set
-    threshold, mean_cv, std_cv = compute_uncertainty_threshold_from_cv(
-        ensemble_model, cv_loader)
-    kl_metrics.update({
-        "threshold_cv": round(threshold, 6),
-        "mean_unc_cv":  round(mean_cv, 6),
-        "std_unc_cv":   round(std_cv, 6),
-    })
+    y_true_full, y_pred_full, _, unc_mean, unc_max, entropy = _run_forward(
+        ensemble_model, full_loader)
 
-    # Uncertainty on full dataset
-    y_true_full, y_pred_full, uncertainty = _run_forward(ensemble_model, full_loader)
-    kl_metrics["uq_mean_uncertainty"] = float(np.mean(uncertainty))
+    kl_metrics["mean_unc_mean"] = round(float(np.mean(unc_mean)), 6)
+    kl_metrics["mean_unc_max"] = round(float(np.mean(unc_max)), 6)
+    kl_metrics["mean_entropy"] = round(float(np.mean(entropy)), 6)
 
-    npz_path = config.RESULTS_DIR / f"{ensemble_name}_uncertainty.npz"
-    np.savez(npz_path, y_true=y_true_full, y_pred=y_pred_full, uncertainty=uncertainty)
-    print(f"  [Full dataset] Uncertainty saved: {npz_path}")
+    npz_path = config.ENSEMBLES_DIR / f"{ensemble_name}_uncertainty.npz"
+    np.savez(npz_path,
+             y_true=y_true_full, y_pred=y_pred_full,
+             unc_mean=unc_mean, unc_max=unc_max, entropy=entropy)
+    print(f"  [Full dataset] Saved: {npz_path}")
 
-    # Persist threshold so visualize.py can read it
-    threshold_path = config.RESULTS_DIR / f"{ensemble_name}_threshold.json"
-    with open(threshold_path, "w") as f:
-        json.dump({
-            "ensemble_name":    ensemble_name,
-            "threshold":        round(threshold, 6),
-            "mean_unc_cv":      round(mean_cv, 6),
-            "std_unc_cv":       round(std_cv, 6),
-            "sigma_multiplier": config.UNCERTAINTY_SIGMA_MULTIPLIER,
-            "note": "Threshold calibrated on CV portion (~1402 samples). Holdout not used.",
-        }, f, indent=2)
-
-    return kl_metrics, uncertainty, y_true_full, y_pred_full, threshold
+    return kl_metrics, unc_mean, unc_max, entropy, y_true_full
 
 
-# =============================================================================
-# UQ validation against expert agreement labels
-# =============================================================================
-
-def evaluate_uncertainty_detection(ensemble_name, uncertainty_scores,
-                                   expert_agreement_labels, threshold):
-    flags = (uncertainty_scores > threshold).astype(int)
-
+def _eval_one_signal(signal_name, unc_scores, expert_labels, threshold):
+    flags = (unc_scores > threshold).astype(int)
     try:
-        auroc = float(roc_auc_score(expert_agreement_labels, uncertainty_scores))
+        auroc = float(roc_auc_score(expert_labels, unc_scores))
+        auprc = float(average_precision_score(expert_labels, unc_scores))
     except ValueError:
-        auroc = float("nan")
+        auroc = auprc = float("nan")
 
-    f1_unc = float(f1_score(expert_agreement_labels, flags,
-                             pos_label=config.UNCERTAIN_LABEL, zero_division=0))
-    cm     = confusion_matrix(expert_agreement_labels, flags,
-                              labels=[config.CERTAIN_LABEL, config.UNCERTAIN_LABEL])
+    f1_unc = float(f1_score(expert_labels, flags, pos_label=config.UNCERTAIN_LABEL, zero_division=0))
+    cm = confusion_matrix(expert_labels, flags, labels=[config.CERTAIN_LABEL, config.UNCERTAIN_LABEL])
 
-    n_total     = len(uncertainty_scores)
-    n_exp_unc   = int((expert_agreement_labels == config.UNCERTAIN_LABEL).sum())
-    n_flagged   = int(flags.sum())
+    mask_c = expert_labels == config.CERTAIN_LABEL
+    mask_u = expert_labels == config.UNCERTAIN_LABEL
+    mu_c = float(np.mean(unc_scores[mask_c])) if mask_c.any() else float("nan")
+    mu_u = float(np.mean(unc_scores[mask_u])) if mask_u.any() else float("nan")
 
-    mask_c = expert_agreement_labels == config.CERTAIN_LABEL
-    mask_u = expert_agreement_labels == config.UNCERTAIN_LABEL
-    mu_c   = float(np.mean(uncertainty_scores[mask_c])) if mask_c.any() else float("nan")
-    mu_u   = float(np.mean(uncertainty_scores[mask_u])) if mask_u.any() else float("nan")
+    print(f"    [{signal_name:<9}]  "
+          f"AUROC={auroc:.4f}  AUPRC={auprc:.4f}  "
+          f"F1={f1_unc:.4f}  "
+          f"flagged={flags.sum()}/{len(flags)}  "
+          f"μ_certain={mu_c:.4f}  μ_uncertain={mu_u:.4f}")
 
-    results = {
-        "ensemble_name":             ensemble_name,
-        "threshold":                 round(threshold, 6),
-        "threshold_source":          "CV set (training-side, ~1402 samples)",
-        "auroc_uncertain_detection": round(auroc, 4),
-        "f1_uncertain":              round(f1_unc, 4),
-        "n_total":                   n_total,
-        "n_expert_uncertain":        n_exp_unc,
-        "n_ensemble_flagged":        n_flagged,
-        "mean_unc_certain":          round(mu_c, 6),
-        "mean_unc_uncertain":        round(mu_u, 6),
-        "confusion_matrix":          cm.tolist(),
+    return {
+        f"auroc_{signal_name}": round(auroc, 4),
+        f"auprc_{signal_name}": round(auprc, 4),
+        f"f1_uncertain_{signal_name}": round(f1_unc, 4),
+        f"n_flagged_{signal_name}": int(flags.sum()),
+        f"mean_unc_certain_{signal_name}": round(mu_c, 6),
+        f"mean_unc_uncertain_{signal_name}": round(mu_u, 6),
+        f"cm_{signal_name}": cm.tolist(),
     }
+
+
+def evaluate_uncertainty_detection(ensemble_name, unc_mean, unc_max, entropy,
+                                   expert_agreement_labels, thresholds):
+    n_total = len(unc_mean)
+    n_exp_unc = int((expert_agreement_labels == config.UNCERTAIN_LABEL).sum())
 
     print(f"\n{'=' * 65}")
     print(f"UQ VALIDATION: {ensemble_name}")
     print(f"{'=' * 65}")
-    print(f"  Threshold (from CV set):         {threshold:.6f}")
-    print(f"  Total samples (full dataset):    {n_total}")
-    print(f"  Expert-uncertain (ground truth): {n_exp_unc}  ({100*n_exp_unc/n_total:.1f}%)")
-    print(f"  Ensemble-flagged (>threshold):   {n_flagged}  ({100*n_flagged/n_total:.1f}%)")
-    print(f"  AUROC:                           {auroc:.4f}")
-    print(f"  F1 (uncertain):                  {f1_unc:.4f}")
-    print(f"  Mean unc(x) — certain:           {mu_c:.4f}")
-    print(f"  Mean unc(x) — uncertain:         {mu_u:.4f}")
-    print(f"\n  Confusion Matrix:")
-    print(f"    Predicted →     Certain  Uncertain")
-    print(f"    True Certain:   {cm[0,0]:6d}   {cm[0,1]:6d}")
-    print(f"    True Uncertain: {cm[1,0]:6d}   {cm[1,1]:6d}")
-    print(classification_report(expert_agreement_labels, flags,
-                                 labels=[config.CERTAIN_LABEL, config.UNCERTAIN_LABEL],
-                                 target_names=config.AGREEMENT_CLASS_NAMES,
-                                 zero_division=0))
+    print(f"  Total samples (full dataset):     {n_total}")
+    print(f"  Expert-uncertain (ground truth):  {n_exp_unc}  "
+          f"({100 * n_exp_unc / n_total:.1f}%)")
+    print(f"  Thresholds (CV 95th percentile): "
+          f"unc_mean={thresholds['unc_mean']:.4f}  "
+          f"unc_max={thresholds['unc_max']:.4f}  "
+          f"entropy={thresholds['entropy']:.4f}")
 
-    with open(config.RESULTS_DIR / f"{ensemble_name}_uq_detection.json", "w") as f:
+    results = {
+        "ensemble_name": ensemble_name,
+        "n_total": n_total,
+        "n_expert_uncertain": n_exp_unc,
+        "threshold_source": "Mega Ensemble on CV set, 95th percentile per signal",
+        "threshold_unc_mean": round(thresholds["unc_mean"], 6),
+        "threshold_unc_max": round(thresholds["unc_max"], 6),
+        "threshold_entropy": round(thresholds["entropy"], 6),
+    }
+
+    for sig_name, scores in [("unc_mean", unc_mean), ("unc_max", unc_max), ("entropy", entropy)]:
+        results.update(_eval_one_signal(sig_name, scores, expert_agreement_labels, thresholds[sig_name]))
+
+    best_signal = max(["unc_mean", "unc_max", "entropy"], key=lambda s: results.get(f"auroc_{s}", 0.0))
+    best_flags = ({"unc_mean": unc_mean, "unc_max": unc_max, "entropy": entropy}[best_signal] > thresholds[
+        best_signal]).astype(int)
+    results["best_signal_by_auroc"] = best_signal
+
+    print(f"\n  Best signal by AUROC: {best_signal}")
+    print(classification_report(expert_agreement_labels, best_flags,
+                                labels=[config.CERTAIN_LABEL, config.UNCERTAIN_LABEL],
+                                target_names=config.AGREEMENT_CLASS_NAMES,
+                                zero_division=0))
+
+    with open(config.ENSEMBLES_DIR / f"{ensemble_name}_uq_detection.json", "w") as f:
         json.dump(results, f, indent=2)
+
     return results
 
 
-# =============================================================================
-# Excel export
-# =============================================================================
-
-def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_result):
+def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_results):
     df_kl = pd.DataFrame(kl_metrics_all)
+
     if "f1_per_class" in df_kl.columns:
         splits = pd.DataFrame(df_kl["f1_per_class"].tolist(),
-                              columns=["F1_KL0","F1_KL1","F1_KL2","F1_KL3","F1_KL4"])
-        df_kl  = pd.concat([df_kl.drop("f1_per_class", axis=1), splits], axis=1)
+                              columns=["F1_KL0", "F1_KL1", "F1_KL2", "F1_KL3", "F1_KL4"])
+        df_kl = pd.concat([df_kl.drop("f1_per_class", axis=1), splits], axis=1)
+    if "brier_per_class" in df_kl.columns:
+        bp = pd.DataFrame(df_kl["brier_per_class"].tolist(),
+                          columns=["Brier_KL0", "Brier_KL1", "Brier_KL2", "Brier_KL3", "Brier_KL4"])
+        df_kl = pd.concat([df_kl.drop("brier_per_class", axis=1), bp], axis=1)
 
     df_uq = pd.DataFrame(uq_results_all)
-    if "confusion_matrix" in df_uq.columns:
-        df_uq["TN"]  = df_uq["confusion_matrix"].apply(lambda x: x[0][0])
-        df_uq["FP"]  = df_uq["confusion_matrix"].apply(lambda x: x[0][1])
-        df_uq["FN"]  = df_uq["confusion_matrix"].apply(lambda x: x[1][0])
-        df_uq["TP"]  = df_uq["confusion_matrix"].apply(lambda x: x[1][1])
-        df_uq        = df_uq.drop("confusion_matrix", axis=1)
+    for sig in ["unc_mean", "unc_max", "entropy"]:
+        col = f"cm_{sig}"
+        if col in df_uq.columns:
+            df_uq[f"TN_{sig}"] = df_uq[col].apply(lambda x: x[0][0] if x else 0)
+            df_uq[f"FP_{sig}"] = df_uq[col].apply(lambda x: x[0][1] if x else 0)
+            df_uq[f"FN_{sig}"] = df_uq[col].apply(lambda x: x[1][0] if x else 0)
+            df_uq[f"TP_{sig}"] = df_uq[col].apply(lambda x: x[1][1] if x else 0)
+            df_uq = df_uq.drop(col, axis=1)
 
-    excel_path = config.RESULTS_DIR / "MASTER_RESULTS_SUMMARY.xlsx"
+    excel_path = config.ENSEMBLES_DIR / "MASTER_RESULTS_SUMMARY.xlsx"
     with pd.ExcelWriter(excel_path) as writer:
         df_kl.to_excel(writer, sheet_name="KL_Classification", index=False)
-        df_uq.to_excel(writer, sheet_name="UQ_Detection",      index=False)
-        pd.DataFrame([mw_result]).to_excel(writer, sheet_name="Mann_Whitney_Test", index=False)
-    print(f"  Results saved: {excel_path}")
+        df_uq.to_excel(writer, sheet_name="UQ_Detection", index=False)
+        pd.DataFrame(mw_results).to_excel(writer, sheet_name="Mann_Whitney_Test", index=False)
+    print(f"\n  Master results saved: {excel_path}")
 
 
-# =============================================================================
-# Summary tables
-# =============================================================================
-
-def print_uq_summary_table(all_kl_metrics):
-    print("\n" + "=" * 100)
-    print(" KL Classification — Ensembles on HOLD-OUT")
-    print("=" * 100)
-    print(f"{'Model':<28} {'Kappa':>8} {'F1-Mac':>8} {'Threshold':>10} | "
+def print_kl_summary_table(all_kl_metrics):
+    print("\n" + "=" * 110)
+    print(" KL Classification — all ensembles on HOLD-OUT (clean)")
+    print("=" * 110)
+    print(f"{'Model':<28} {'Kappa':>8} {'F1-Mac':>8} {'ECE':>7} {'Brier':>7} | "
           f"{'KL0':>6} {'KL1':>6} {'KL2':>6} {'KL3':>6} {'KL4':>6}")
-    print("-" * 100)
+    print("-" * 110)
     for m in sorted(all_kl_metrics, key=lambda x: x["cohen_kappa_Quadratic"], reverse=True):
         f1_c = m["f1_per_class"]
-        print(f"{m['model_name']:<28} {m['cohen_kappa_Quadratic']:>8.4f} "
-              f"{m['f1_macro']:>8.4f} {m.get('threshold_cv', float('nan')):>10.6f} | "
-              f"{f1_c[0]:>6.4f} {f1_c[1]:>6.4f} {f1_c[2]:>6.4f} {f1_c[3]:>6.4f} {f1_c[4]:>6.4f}")
-    print("=" * 100)
+        print(f"{m['model_name']:<28} "
+              f"{m['cohen_kappa_Quadratic']:>8.4f} "
+              f"{m['f1_macro']:>8.4f} "
+              f"{m.get('ece', float('nan')):>7.4f} "
+              f"{m.get('brier_score_mean', float('nan')):>7.4f} | "
+              f"{f1_c[0]:>6.4f} {f1_c[1]:>6.4f} "
+              f"{f1_c[2]:>6.4f} {f1_c[3]:>6.4f} {f1_c[4]:>6.4f}")
+    print("=" * 110)
 
 
 def print_uq_detection_table(all_uq_results):
-    print("\n" + "=" * 100)
-    print(" UQ Detection — Full dataset, threshold from CV set")
-    print("=" * 100)
-    print(f"{'Model':<28} {'AUROC':>7} {'F1-Unc':>7} {'Flagged':>8} {'E-Unc':>7} | "
-          f"{'μ-unc(C)':>9} {'μ-unc(U)':>9}")
-    print("-" * 100)
-    for r in sorted(all_uq_results, key=lambda x: x["auroc_uncertain_detection"], reverse=True):
-        print(f"{r['ensemble_name']:<28} {r['auroc_uncertain_detection']:>7.4f} "
-              f"{r['f1_uncertain']:>7.4f} {r['n_ensemble_flagged']:>7d}  "
-              f"{r['n_expert_uncertain']:>6d}  | "
-              f"{r['mean_unc_certain']:>9.4f} {r['mean_unc_uncertain']:>9.4f}")
-    print("=" * 100)
-    print("NOTE: KL metrics on holdout only. UQ on full dataset. Threshold from CV set.")
+    print("\n" + "=" * 120)
+    print(" UQ Detection — full dataset, thresholds from Mega Ensemble on CV set (95th percentile)")
+    print("=" * 120)
+    print(f"{'Model':<28} "
+          f"{'AUROC_mn':>9} {'AUPRC_mn':>9} "
+          f"{'AUROC_mx':>9} {'AUPRC_mx':>9} "
+          f"{'AUROC_ent':>10} {'AUPRC_ent':>10} | "
+          f"{'E-Unc':>6} {'Best':>9}")
+    print("-" * 120)
+    for r in sorted(all_uq_results,
+                    key=lambda x: max(
+                        x.get("auroc_unc_mean", 0),
+                        x.get("auroc_unc_max", 0),
+                        x.get("auroc_entropy", 0),
+                    ), reverse=True):
+        print(f"{r['ensemble_name']:<28} "
+              f"{r.get('auroc_unc_mean', float('nan')):>9.4f} "
+              f"{r.get('auprc_unc_mean', float('nan')):>9.4f} "
+              f"{r.get('auroc_unc_max', float('nan')):>9.4f} "
+              f"{r.get('auprc_unc_max', float('nan')):>9.4f} "
+              f"{r.get('auroc_entropy', float('nan')):>10.4f} "
+              f"{r.get('auprc_entropy', float('nan')):>10.4f} | "
+              f"{r['n_expert_uncertain']:>6} "
+              f"{r.get('best_signal_by_auroc', '?'):>9}")
+    print("=" * 120)
+    print("mn=unc_mean  mx=unc_max  ent=entropy  |  Best = signal with highest AUROC")
 
-
-# =============================================================================
-# Main
-# =============================================================================
 
 def main():
     print("=" * 65)
     print("Ensemble Evaluation and Uncertainty Quantification")
     print("=" * 65)
-    config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    config.ENSEMBLES_DIR.mkdir(parents=True, exist_ok=True)
 
     all_dual_samples = load_dual_expert_samples()
     cv_samples, test_dual_samples = split_holdout(all_dual_samples)
 
-    # Three loaders — each with a distinct, non-overlapping purpose
-    cv_loader      = build_test_dataloader(cv_samples)           # threshold calibration
-    holdout_loader = build_test_dataloader(test_dual_samples)    # KL metrics (clean)
-    full_loader    = build_test_dataloader(all_dual_samples)     # UQ analysis
+    cv_loader = build_test_dataloader(cv_samples)
+    holdout_loader = build_test_dataloader(test_dual_samples)
+    full_loader = build_test_dataloader(all_dual_samples)
 
     expert_agreement_labels = np.array([s[2] for s in all_dual_samples])
-    n_certain   = int((expert_agreement_labels == config.CERTAIN_LABEL).sum())
-    n_uncertain = int((expert_agreement_labels == config.UNCERTAIN_LABEL).sum())
+    n_c = int((expert_agreement_labels == config.CERTAIN_LABEL).sum())
+    n_u = int((expert_agreement_labels == config.UNCERTAIN_LABEL).sum())
+
     print(f"\n  CV set (threshold):   {len(cv_samples)} samples")
-    print(f"  Holdout (KL metrics): {len(test_dual_samples)} samples")
+    print(f"  Holdout (KL):         {len(test_dual_samples)} samples")
     print(f"  Full dataset (UQ):    {len(all_dual_samples)} samples")
-    print(f"    Expert-certain:     {n_certain}")
-    print(f"    Expert-uncertain:   {n_uncertain}")
+    print(f"    Expert-certain:     {n_c}")
+    print(f"    Expert-uncertain:   {n_u}")
 
-    np.save(config.RESULTS_DIR / "expert_agreement_labels.npy", expert_agreement_labels)
+    np.save(config.ENSEMBLES_DIR / "expert_agreement_labels.npy", expert_agreement_labels)
 
-    kl_metrics_all:   list       = []
-    uq_results_all:   list       = []
-    all_uncertainties: dict[str, np.ndarray] = {}
-    all_thresholds:    dict[str, float]       = {}
+    print("\n" + "=" * 65)
+    print(" STEP 1: Computing uncertainty thresholds (Mega on CV set)")
+    print("=" * 65)
+    mega_for_threshold = build_mega_ensemble()
+    thresholds = compute_thresholds_from_cv(mega_for_threshold, cv_loader)
+    del mega_for_threshold
+    torch.cuda.empty_cache()
+
+    print("\n" + "=" * 65)
+    print(" STEP 2: Evaluate Ensembles")
+    print("=" * 65)
+    kl_metrics_all = []
+    uq_results_all = []
+    all_unc_max_dict: dict[str, np.ndarray] = {}
 
     def _run(name, ensemble):
-        metrics, unc, _, _, thr = evaluate_ensemble(
-            name, ensemble, holdout_loader, full_loader, cv_loader)
+        metrics, unc_mean, unc_max, entropy, _ = evaluate_ensemble(
+            name, ensemble, holdout_loader, full_loader)
         kl_metrics_all.append(metrics)
-        all_uncertainties[name] = unc
-        all_thresholds[name]    = thr
+
+        uq_results_all.append(evaluate_uncertainty_detection(
+            name, unc_mean, unc_max, entropy,
+            expert_agreement_labels, thresholds))
+
+        all_unc_max_dict[name] = unc_max
         del ensemble
         torch.cuda.empty_cache()
 
     for cfg in config.MODELS_CONFIG:
         _run(f"{cfg['name']}_Homogeneous", build_homogeneous_ensemble(cfg))
 
-    _run("Heterogeneous_Avg",      build_heterogeneous_ensemble())
+    _run("Heterogeneous_Avg", build_heterogeneous_ensemble())
     _run("Heterogeneous_Weighted", build_weighted_ensemble())
-    _run("Mega_Ensemble_TypD",     build_mega_ensemble())
-
-    v1, v2 = build_class_specific_ensembles()
-    _run("Class_Specific_With_Rep", v1)
-    _run("Class_Specific_Unique",   v2)
-
-    # UQ validation
-    print("\n" + "=" * 65)
-    print("UQ Analysis — CV-calibrated threshold vs Expert Agreement Labels")
-    print("=" * 65)
-    for name, unc in all_uncertainties.items():
-        uq_results_all.append(evaluate_uncertainty_detection(
-            name, unc, expert_agreement_labels, all_thresholds[name]))
-
-    # Mann-Whitney U test
-    primary = "Mega_Ensemble_TypD"
-    if primary not in all_uncertainties:
-        primary = next(iter(all_uncertainties))
-
-    unc_scores   = all_uncertainties[primary]
-    mask_c       = expert_agreement_labels == config.CERTAIN_LABEL
-    mask_u       = expert_agreement_labels == config.UNCERTAIN_LABEL
-    print(f"\n  Mann-Whitney U test — {primary}")
-    print(f"    n_certain={mask_c.sum()}, n_uncertain={mask_u.sum()}")
+    _run("Mega_Ensemble", build_mega_ensemble())
 
     from evaluate import mann_whitney_uncertainty_test
-    mw_result = mann_whitney_uncertainty_test(unc_scores[mask_c], unc_scores[mask_u])
-    mw_result["ensemble_name"] = primary
-    with open(config.RESULTS_DIR / f"{primary}_mann_whitney.json", "w") as f:
+
+    mega_uq = next(r for r in uq_results_all if r["ensemble_name"] == "Mega_Ensemble")
+    best_sig = mega_uq.get("best_signal_by_auroc", "unc_max")
+    unc_for_mw = all_unc_max_dict["Mega_Ensemble"]
+
+    if best_sig != "unc_max":
+        npz = np.load(config.ENSEMBLES_DIR / "Mega_Ensemble_uncertainty.npz")
+        unc_for_mw = npz[best_sig]
+
+    mask_c = expert_agreement_labels == config.CERTAIN_LABEL
+    mask_u = expert_agreement_labels == config.UNCERTAIN_LABEL
+
+    print(f"\n  Mann-Whitney U test — Mega Ensemble  [{best_sig}]")
+    print(f"    n_certain={mask_c.sum()},  n_uncertain={mask_u.sum()}")
+
+    mw_result = mann_whitney_uncertainty_test(unc_for_mw[mask_c], unc_for_mw[mask_u])
+    mw_result["ensemble_name"] = "Mega_Ensemble"
+    mw_result["unc_signal"] = best_sig
+
+    with open(config.ENSEMBLES_DIR / "Mega_Ensemble_mann_whitney.json", "w") as f:
         json.dump(mw_result, f, indent=2)
 
-    save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_result)
-    print_uq_summary_table(kl_metrics_all)
+    save_master_results_to_excel(kl_metrics_all, uq_results_all, [mw_result])
+    print_kl_summary_table(kl_metrics_all)
     print_uq_detection_table(uq_results_all)
 
 

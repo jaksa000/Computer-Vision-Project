@@ -5,8 +5,8 @@ import torch
 
 import config
 from dataset import load_all_samples, build_fold_dataloaders, split_holdout, build_test_dataloader
-from models  import build_model
-from train   import train_model
+from models import build_model
+from train import train_model
 from evaluate import evaluate_model, print_summary_table
 
 
@@ -68,7 +68,7 @@ def main():
             metrics = evaluate_model(
                 model_name=run_name,
                 model=model,
-                test_loader=val_loader,
+                val_loader=val_loader,
                 history=history,
             )
 
@@ -79,11 +79,13 @@ def main():
         cv_results[model_name] = model_metrics
         kappas = [m["cohen_kappa_Quadratic"] for m in model_metrics]
         print(f"\n FINISHED: {model_name}. Average kappa out of 5 folds: {np.mean(kappas):.4f} ±{np.std(kappas):.4f}")
+
     all_metrics = [m for folds in cv_results.values() for m in folds]
     print_summary_table(all_metrics)
     print_cv_summary(cv_results)
 
     print("Results saved to:", config.RESULTS_DIR)
+
 
 if __name__ == "__main__":
     main()
