@@ -1,676 +1,552 @@
 =================================================================
-Ensembles Evaluation And Uncertainty Quantification
+Ensemble Evaluation and Uncertainty Quantification
 =================================================================
 
-============================================================
-DUAL-EXPERT LABELING — CERTAIN vs UNCERTAIN (HASH MATCHING)
-============================================================
-  Images in Expert-I:            1633
-  Images in Expert-II:           1633
-  Images matched:                1633
-
-  Certain Labels (Experts agree): 1622  (99.3%)
-  Uncertain Labels:                 11  (0.7%)
-
-  Confusion Matrix (Expert-I vs Expert-II):
-  (shows only disagreements )
-  Expert-I \ II |  KL0  KL1  KL2  KL3  KL4
-  ----------------------------------------
-  KL0          |    0   11    0    0    0
+  Loaded 1650 matched pairs from cache: results/expert_matches_cache.csv
+  Certain: 1639  Uncertain: 11
 
 ============================================================
  DATA SPLIT
 ============================================================
-  K-Fold CV data (85%): 1388 images
-  Hold-out data (15%): 245 images
+  K-Fold CV data (85%): 1402 images
+  Hold-out data  (15%): 248 images
 
-Hold-out: 245 samples
-  Expert-certain:   244
-  Expert-uncertain: 1
- Experts labels saved to: results/expert_agreement_labels.npy
+  CV set (threshold):   1402 samples
+  Holdout (KL):         248 samples
+  Full dataset (UQ):    1650 samples
+    Expert-certain:     1639
+    Expert-uncertain:   11
 
- Building Homogeneous Ensemble for : resnet50
+=================================================================
+ STEP 1: Computing uncertainty thresholds (Mega on CV set)
+=================================================================
 
- Buliding model: resnet50
+ Building Mega Ensemble (Type D — 25 models)
 
- Buliding model: resnet50
+ Building model: resnet50
 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+  Parameters: 23,518,277 total, 23,518,277 trainable
 
- Buliding model: resnet50
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
 
- Buliding model: resnet50
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
 
- Buliding model: resnet50
-Evaluation of resnet50_Homogeneous
-  Uncertainty per sample saved to: results/resnet50_Homogeneous_uncertainty.npz
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
 
- Building Homogeneous Ensemble for : efficientnet_b3
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
 
- Buliding model: efficientnet_b3
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
 
- Buliding model: efficientnet_b3
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
 
- Buliding model: efficientnet_b3
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
 
- Buliding model: efficientnet_b3
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
 
- Buliding model: efficientnet_b3
-Evaluation of efficientnet_b3_Homogeneous
-  Uncertainty per sample saved to: results/efficientnet_b3_Homogeneous_uncertainty.npz
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
 
- Building Homogeneous Ensemble for : densenet121
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
 
- Buliding model: densenet121
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
 
- Buliding model: densenet121
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
 
- Buliding model: densenet121
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
 
- Buliding model: densenet121
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
 
- Buliding model: densenet121
-Evaluation of densenet121_Homogeneous
-  Uncertainty per sample saved to: results/densenet121_Homogeneous_uncertainty.npz
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
 
- Building Homogeneous Ensemble for : mobilenetv3_large
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
 
- Buliding model: mobilenetv3_large
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
 
- Buliding model: mobilenetv3_large
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
 
- Buliding model: mobilenetv3_large
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
 
- Buliding model: mobilenetv3_large
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
 
- Buliding model: mobilenetv3_large
-Evaluation of mobilenetv3_large_Homogeneous
-  Uncertainty per sample saved to: results/mobilenetv3_large_Homogeneous_uncertainty.npz
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
 
- Building Homogeneous Ensemble for : convnext_tiny
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
 
- Buliding model: convnext_tiny
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
 
- Buliding model: convnext_tiny
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+  Loaded 25 models.
 
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-Evaluation of convnext_tiny_Homogeneous
-  Uncertainty per sample saved to: results/convnext_tiny_Homogeneous_uncertainty.npz
-
- Building Heterogeneous Ensemble (Best fold of each architecture)
-
- Buliding model: resnet50
-
- Buliding model: efficientnet_b3
-
- Buliding model: densenet121
-
- Buliding model: mobilenetv3_large
-
- Buliding model: convnext_tiny
-Evaluation of Heterogeneous_Avg
-  Uncertainty per sample saved to: results/Heterogeneous_Avg_uncertainty.npz
-
- Building Weighted Ensemble (Mixture of Experts on F1 basis)
-
- Buliding model: resnet50
-
- Buliding model: efficientnet_b3
-
- Buliding model: densenet121
-
- Buliding model: mobilenetv3_large
-
- Buliding model: convnext_tiny
-Evaluation of Heterogeneous_Weighted
-  Uncertainty per sample saved to: results/Heterogeneous_Weighted_uncertainty.npz
-
-Building MEGA ENSEMBLE (Type D: 25 models)
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-Evaluation of Mega_Ensemble_TypD
-  Uncertainty per sample saved to: results/Mega_Ensemble_TypD_uncertainty.npz
-
-Building CLASS-SPECIFIC ENSEMBLES (Version 1 and 2)
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: resnet50
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: efficientnet_b3
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: densenet121
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: mobilenetv3_large
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
- Buliding model: convnext_tiny
-
-  Version 1: Best of the best with allowed repetitions:
-    KL0: convnext_tiny_f2       (F1: 0.9326)
-    KL1: densenet121_f4         (F1: 0.8242)
-    KL2: densenet121_f2         (F1: 0.7619)
-    KL3: densenet121_f5         (F1: 0.9114)
-    KL4: densenet121_f5         (F1: 0.9296)
-
-  Version 2: Diverse ensemble, unique specialists:
-    KL0: convnext_tiny_f2       (F1: 0.9326)
-    KL1: densenet121_f4         (F1: 0.8242)
-    KL2: densenet121_f2         (F1: 0.7619)
-    KL3: densenet121_f5         (F1: 0.9114)
-    KL4: efficientnet_b3_f1     (F1: 0.9167)
-Evaluation of Class_Specific_With_Rep
-  Uncertainty per sample saved to: results/Class_Specific_With_Rep_uncertainty.npz
-Evaluation of Class_Specific_Unique
-  Uncertainty per sample saved to: results/Class_Specific_Unique_uncertainty.npz
-
+ Computing uncertainty thresholds from CV set (95th percentile)...
+    CV samples:          1402
+    Threshold unc_mean:  0.164941
+    Threshold unc_max:   0.323527
+    Threshold entropy:   1.102470
+    Thresholds saved: results/ensembles/uq_thresholds.json
 
 =================================================================
-UQ Analysis — 3σ Threshold and Comparison with Experts
+ STEP 2: Evaluate Ensembles
 =================================================================
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0531
-    std(unc)  = 0.0315
-    threshold = 0.1477
-    Uncertain samples (unc > threshold): 1 / 245
+ Building Homogeneous Ensemble: resnet50
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+Evaluating: resnet50_Homogeneous
+  [Holdout]  Kappa: 0.9334  F1: 0.8344  ECE: 0.1245  Brier: 0.0519
+  [Full dataset] Saved: results/ensembles/resnet50_Homogeneous_uncertainty.npz
 
 =================================================================
 UQ VALIDATION: resnet50_Homogeneous
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   1 (0.4%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.6100  AUPRC=0.0114  F1=0.0000  flagged=1/1650  μ_certain=0.0578  μ_uncertain=0.0707
+    [unc_max  ]  AUROC=0.6198  AUPRC=0.0112  F1=0.0000  flagged=15/1650  μ_certain=0.1293  μ_uncertain=0.1591
+    [entropy  ]  AUROC=0.6744  AUPRC=0.0156  F1=0.0351  flagged=274/1650  μ_certain=0.7817  μ_uncertain=0.9717
 
-  AUROC (uncertain detection):     0.6025
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0531
-    Uncertain (experts disagree):    0.0595
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      243        1
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: entropy
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       1.00      0.84      0.91      1639
+   Uncertain       0.02      0.45      0.04        11
 
-    accuracy                           0.99       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      0.99      0.99       245
+    accuracy                           0.83      1650
+   macro avg       0.51      0.65      0.47      1650
+weighted avg       0.99      0.83      0.90      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0925
-    std(unc)  = 0.0626
-    threshold = 0.2802
-    Uncertain samples (unc > threshold): 0 / 245
+ Building Homogeneous Ensemble: efficientnet_b3
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+Evaluating: efficientnet_b3_Homogeneous
+  [Holdout]  Kappa: 0.9658  F1: 0.9271  ECE: 0.1302  Brier: 0.0328
+  [Full dataset] Saved: results/ensembles/efficientnet_b3_Homogeneous_uncertainty.npz
 
 =================================================================
 UQ VALIDATION: efficientnet_b3_Homogeneous
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   0 (0.0%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.6026  AUPRC=0.0128  F1=0.0375  flagged=149/1650  μ_certain=0.0826  μ_uncertain=0.1026
+    [unc_max  ]  AUROC=0.6172  AUPRC=0.0259  F1=0.0286  flagged=339/1650  μ_certain=0.1846  μ_uncertain=0.2350
+    [entropy  ]  AUROC=0.5936  AUPRC=0.0096  F1=0.0000  flagged=97/1650  μ_certain=0.5353  μ_uncertain=0.6402
 
-  AUROC (uncertain detection):     0.6475
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0923
-    Uncertain (experts disagree):    0.1308
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      244        0
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: unc_max
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       1.00      0.80      0.88      1639
+   Uncertain       0.01      0.45      0.03        11
 
-    accuracy                           1.00       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      1.00      0.99       245
+    accuracy                           0.79      1650
+   macro avg       0.51      0.63      0.46      1650
+weighted avg       0.99      0.79      0.88      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0447
-    std(unc)  = 0.0414
-    threshold = 0.1689
-    Uncertain samples (unc > threshold): 0 / 245
+ Building Homogeneous Ensemble: densenet121
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+Evaluating: densenet121_Homogeneous
+  [Holdout]  Kappa: 0.9809  F1: 0.9515  ECE: 0.1155  Brier: 0.0222
+  [Full dataset] Saved: results/ensembles/densenet121_Homogeneous_uncertainty.npz
 
 =================================================================
 UQ VALIDATION: densenet121_Homogeneous
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   0 (0.0%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.5626  AUPRC=0.0080  F1=0.0000  flagged=8/1650  μ_certain=0.0483  μ_uncertain=0.0510
+    [unc_max  ]  AUROC=0.5626  AUPRC=0.0083  F1=0.0000  flagged=39/1650  μ_certain=0.1125  μ_uncertain=0.1222
+    [entropy  ]  AUROC=0.6607  AUPRC=0.0134  F1=0.0256  flagged=67/1650  μ_certain=0.5153  μ_uncertain=0.6793
 
-  AUROC (uncertain detection):     0.7500
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0446
-    Uncertain (experts disagree):    0.0725
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      244        0
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: entropy
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       0.99      0.96      0.98      1639
+   Uncertain       0.01      0.09      0.03        11
 
-    accuracy                           1.00       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      1.00      0.99       245
+    accuracy                           0.95      1650
+   macro avg       0.50      0.53      0.50      1650
+weighted avg       0.99      0.95      0.97      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0617
-    std(unc)  = 0.0557
-    threshold = 0.2287
-    Uncertain samples (unc > threshold): 0 / 245
+ Building Homogeneous Ensemble: mobilenetv3_large
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+Evaluating: mobilenetv3_large_Homogeneous
+  [Holdout]  Kappa: 0.9808  F1: 0.9479  ECE: 0.0894  Brier: 0.0203
+  [Full dataset] Saved: results/ensembles/mobilenetv3_large_Homogeneous_uncertainty.npz
 
 =================================================================
 UQ VALIDATION: mobilenetv3_large_Homogeneous
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   0 (0.0%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.7597  AUPRC=0.0193  F1=0.0364  flagged=44/1650  μ_certain=0.0552  μ_uncertain=0.1044
+    [unc_max  ]  AUROC=0.7377  AUPRC=0.0185  F1=0.0222  flagged=169/1650  μ_certain=0.1280  μ_uncertain=0.2283
+    [entropy  ]  AUROC=0.7722  AUPRC=0.0183  F1=0.0000  flagged=26/1650  μ_certain=0.3779  μ_uncertain=0.6752
 
-  AUROC (uncertain detection):     0.8074
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0615
-    Uncertain (experts disagree):    0.1192
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      244        0
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: entropy
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       0.99      0.98      0.99      1639
+   Uncertain       0.00      0.00      0.00        11
 
-    accuracy                           1.00       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      1.00      0.99       245
+    accuracy                           0.98      1650
+   macro avg       0.50      0.49      0.49      1650
+weighted avg       0.99      0.98      0.98      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0584
-    std(unc)  = 0.0391
-    threshold = 0.1759
-    Uncertain samples (unc > threshold): 1 / 245
+ Building Homogeneous Ensemble: convnext_tiny
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+Evaluating: convnext_tiny_Homogeneous
+  [Holdout]  Kappa: 0.9725  F1: 0.9108  ECE: 0.0894  Brier: 0.0294
+  [Full dataset] Saved: results/ensembles/convnext_tiny_Homogeneous_uncertainty.npz
 
 =================================================================
 UQ VALIDATION: convnext_tiny_Homogeneous
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   1 (0.4%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.5693  AUPRC=0.0108  F1=0.0000  flagged=22/1650  μ_certain=0.0524  μ_uncertain=0.0611
+    [unc_max  ]  AUROC=0.5763  AUPRC=0.0101  F1=0.0208  flagged=85/1650  μ_certain=0.1229  μ_uncertain=0.1448
+    [entropy  ]  AUROC=0.6448  AUPRC=0.0138  F1=0.0000  flagged=25/1650  μ_certain=0.4462  μ_uncertain=0.5904
 
-  AUROC (uncertain detection):     0.6967
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0584
-    Uncertain (experts disagree):    0.0779
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      243        1
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: entropy
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       0.99      0.98      0.99      1639
+   Uncertain       0.00      0.00      0.00        11
 
-    accuracy                           0.99       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      0.99      0.99       245
+    accuracy                           0.98      1650
+   macro avg       0.50      0.49      0.49      1650
+weighted avg       0.99      0.98      0.98      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0745
-    std(unc)  = 0.0500
-    threshold = 0.2245
-    Uncertain samples (unc > threshold): 0 / 245
+ Building Heterogeneous Ensemble (best fold per architecture)
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+Evaluating: Heterogeneous_Avg
+  [Holdout]  Kappa: 0.9819  F1: 0.9505  ECE: 0.1359  Brier: 0.0242
+  [Full dataset] Saved: results/ensembles/Heterogeneous_Avg_uncertainty.npz
 
 =================================================================
 UQ VALIDATION: Heterogeneous_Avg
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   0 (0.0%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.5094  AUPRC=0.0072  F1=0.0000  flagged=43/1650  μ_certain=0.0669  μ_uncertain=0.0634
+    [unc_max  ]  AUROC=0.5144  AUPRC=0.0074  F1=0.0131  flagged=142/1650  μ_certain=0.1537  μ_uncertain=0.1490
+    [entropy  ]  AUROC=0.6157  AUPRC=0.0108  F1=0.0000  flagged=36/1650  μ_certain=0.5069  μ_uncertain=0.6115
 
-  AUROC (uncertain detection):     0.9139
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0742
-    Uncertain (experts disagree):    0.1510
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      244        0
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: entropy
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       0.99      0.98      0.99      1639
+   Uncertain       0.00      0.00      0.00        11
 
-    accuracy                           1.00       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      1.00      0.99       245
+    accuracy                           0.97      1650
+   macro avg       0.50      0.49      0.49      1650
+weighted avg       0.99      0.97      0.98      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0745
-    std(unc)  = 0.0500
-    threshold = 0.2245
-    Uncertain samples (unc > threshold): 0 / 245
+ Building Weighted Ensemble (per-class F1 weights)
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+Evaluating: Heterogeneous_Weighted
+  [Holdout]  Kappa: 0.9819  F1: 0.9505  ECE: 0.1335  Brier: 0.0238
+  [Full dataset] Saved: results/ensembles/Heterogeneous_Weighted_uncertainty.npz
 
 =================================================================
 UQ VALIDATION: Heterogeneous_Weighted
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   0 (0.0%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.5094  AUPRC=0.0072  F1=0.0000  flagged=43/1650  μ_certain=0.0669  μ_uncertain=0.0634
+    [unc_max  ]  AUROC=0.5144  AUPRC=0.0074  F1=0.0131  flagged=142/1650  μ_certain=0.1537  μ_uncertain=0.1490
+    [entropy  ]  AUROC=0.6148  AUPRC=0.0107  F1=0.0000  flagged=35/1650  μ_certain=0.4999  μ_uncertain=0.6028
 
-  AUROC (uncertain detection):     0.9139
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0742
-    Uncertain (experts disagree):    0.1510
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      244        0
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: entropy
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       0.99      0.98      0.99      1639
+   Uncertain       0.00      0.00      0.00        11
 
-    accuracy                           1.00       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      1.00      0.99       245
+    accuracy                           0.97      1650
+   macro avg       0.50      0.49      0.49      1650
+weighted avg       0.99      0.97      0.98      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0959
-    std(unc)  = 0.0473
-    threshold = 0.2377
-    Uncertain samples (unc > threshold): 0 / 245
+ Building Mega Ensemble (Type D — 25 models)
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: efficientnet_b3
+  Parameters: 10,703,917 total, 10,703,917 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: densenet121
+  Parameters: 6,958,981 total, 6,958,981 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: mobilenetv3_large
+  Parameters: 4,208,437 total, 4,208,437 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+
+ Building model: convnext_tiny
+  Parameters: 27,823,973 total, 27,823,973 trainable
+  Loaded 25 models.
+
+Evaluating: Mega_Ensemble
+  [Holdout]  Kappa: 0.9830  F1: 0.9585  ECE: 0.1584  Brier: 0.0262
+  [Full dataset] Saved: results/ensembles/Mega_Ensemble_uncertainty.npz
 
 =================================================================
-UQ VALIDATION: Mega_Ensemble_TypD
+UQ VALIDATION: Mega_Ensemble
 =================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   0 (0.0%)
+  Total samples (full dataset):     1650
+  Expert-uncertain (ground truth):  11  (0.7%)
+  Thresholds (CV 95th percentile): unc_mean=0.1649  unc_max=0.3235  entropy=1.1025
+    [unc_mean ]  AUROC=0.6614  AUPRC=0.0119  F1=0.0000  flagged=79/1650  μ_certain=0.0882  μ_uncertain=0.1126
+    [unc_max  ]  AUROC=0.6767  AUPRC=0.0144  F1=0.0000  flagged=77/1650  μ_certain=0.1871  μ_uncertain=0.2406
+    [entropy  ]  AUROC=0.6921  AUPRC=0.0133  F1=0.0208  flagged=85/1650  μ_certain=0.5978  μ_uncertain=0.7903
 
-  AUROC (uncertain detection):     0.7295
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0958
-    Uncertain (experts disagree):    0.1278
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      244        0
-    True Uncertain:      1        0
-
-  Classification report:
+  Best signal by AUROC: entropy
               precision    recall  f1-score   support
 
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
+     Certain       0.99      0.95      0.97      1639
+   Uncertain       0.01      0.09      0.02        11
 
-    accuracy                           1.00       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      1.00      0.99       245
-
-
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0447
-    std(unc)  = 0.0461
-    threshold = 0.1831
-    Uncertain samples (unc > threshold): 0 / 245
-
-=================================================================
-UQ VALIDATION: Class_Specific_With_Rep
-=================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   0 (0.0%)
-
-  AUROC (uncertain detection):     0.6926
-  F1 (uncertain class):            0.0000
-
-  average unc(x):
-    Certain   (experts agree):   0.0446
-    Uncertain (experts disagree):    0.0567
-
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      244        0
-    True Uncertain:      1        0
-
-  Classification report:
-              precision    recall  f1-score   support
-
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
-
-    accuracy                           1.00       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      1.00      0.99       245
+    accuracy                           0.94      1650
+   macro avg       0.50      0.52      0.50      1650
+weighted avg       0.99      0.94      0.96      1650
 
 
-  Uncertainty threshold (3σ):
-    mean(unc) = 0.0536
-    std(unc)  = 0.0514
-    threshold = 0.2080
-    Uncertain samples (unc > threshold): 1 / 245
+  Mann-Whitney U test — Mega Ensemble  [entropy]
+    n_certain=1639,  n_uncertain=11
 
-=================================================================
-UQ VALIDATION: Class_Specific_Unique
-=================================================================
-  Total Samples:                  245
-  Expert-uncertain (ground truth): 1 (0.4%)
-  Ensemble-flagged (>threshold):   1 (0.4%)
+  Mann-Whitney U test (certain vs uncertain):
+    n_certain   = 1639
+    n_uncertain = 11
+    U           = 5551.50
+    p-value     = 0.013958  Significant (p < 0.05)
+    effect r    = 0.3842  (medium effect)
 
-  AUROC (uncertain detection):     0.8115
-  F1 (uncertain class):            0.0000
+  Master results saved: results/ensembles/MASTER_RESULTS_SUMMARY.xlsx
 
-  average unc(x):
-    Certain   (experts agree):   0.0534
-    Uncertain (experts disagree):    0.1108
+==============================================================================================================
+ KL Classification — all ensembles on HOLD-OUT (clean)
+==============================================================================================================
+Model                           Kappa   F1-Mac     ECE   Brier |    KL0    KL1    KL2    KL3    KL4
+--------------------------------------------------------------------------------------------------------------
+Mega_Ensemble                  0.9830   0.9585  0.1584  0.0262 | 0.9434 0.9078 0.9565 0.9846 1.0000
+Heterogeneous_Avg              0.9819   0.9505  0.1359  0.0242 | 0.9494 0.9103 0.9394 0.9697 0.9836
+Heterogeneous_Weighted         0.9819   0.9505  0.1335  0.0238 | 0.9494 0.9103 0.9394 0.9697 0.9836
+densenet121_Homogeneous        0.9809   0.9515  0.1155  0.0222 | 0.9367 0.8966 0.9394 0.9846 1.0000
+mobilenetv3_large_Homogeneous   0.9808   0.9479  0.0894  0.0203 | 0.9434 0.9014 0.9412 0.9697 0.9836
+convnext_tiny_Homogeneous      0.9725   0.9108  0.0894  0.0294 | 0.9068 0.8175 0.8451 0.9846 1.0000
+efficientnet_b3_Homogeneous    0.9658   0.9271  0.1302  0.0328 | 0.9308 0.8794 0.8571 0.9846 0.9836
+resnet50_Homogeneous           0.9334   0.8344  0.1245  0.0519 | 0.8861 0.7465 0.6769 0.9394 0.9231
+==============================================================================================================
 
-  Confusion Matrix [Certain/Uncertain]:
-    Predicted →     Certain  Uncertain
-    True Certain:      243        1
-    True Uncertain:      1        0
-
-  Classification report:
-              precision    recall  f1-score   support
-
-     Certain       1.00      1.00      1.00       244
-   Uncertain       0.00      0.00      0.00         1
-
-    accuracy                           0.99       245
-   macro avg       0.50      0.50      0.50       245
-weighted avg       0.99      0.99      0.99       245
-
-
-
-=================================================================
- MANN-WHITNEY U Statistical test — Mega_Ensemble_TypD
-=================================================================
-H0: Ensemble std is identical for certain and uncertain.
-H1: Ensemble std is higher for uncertain group (p < 0.05).
-
-  Test Mann-Whitney U (certain vs uncertain):
-    n_certain   = 244
-    n_uncertain = 1
-    U           = 66.00
-    p-value     = 0.216305  Insignificant
-    effect r    = 0.4590  (average efect)
-
-=================================================================
- SAVING RESULTS TO EXCEL (PANDAS)
-=================================================================
- All tables compiled successfully to:
-  results/MASTER_RESULTS_SUMMARY.xlsx
-
-
-=========================================================================================================
- KL Classification Results — Ensembles tested on HOLD-OUT
-=========================================================================================================
-Model                           Kappa   F1-Mac |  UQ-Mean |    KL0    KL1    KL2    KL3    KL4
----------------------------------------------------------------------------------------------------------
-Heterogeneous_Avg              0.9665   0.9136 |   0.0745 | 0.9202 0.8217 0.8571 0.9846 0.9841
-Heterogeneous_Weighted         0.9665   0.9136 |   0.0745 | 0.9202 0.8217 0.8571 0.9846 0.9841
-Mega_Ensemble_TypD             0.9644   0.9201 |   0.0959 | 0.9125 0.8333 0.8857 1.0000 0.9688
-densenet121_Homogeneous        0.9639   0.9206 |   0.0447 | 0.9091 0.8429 0.8824 1.0000 0.9688
-Class_Specific_Unique          0.9620   0.8965 |   0.0536 | 0.8974 0.8261 0.8696 0.9355 0.9538
-Class_Specific_With_Rep        0.9592   0.8962 |   0.0447 | 0.8974 0.8261 0.8657 0.9524 0.9394
-convnext_tiny_Homogeneous      0.9587   0.8892 |   0.0584 | 0.9290 0.8271 0.7838 0.9375 0.9688
-mobilenetv3_large_Homogeneous   0.9478   0.8877 |   0.0617 | 0.8957 0.7717 0.8493 0.9841 0.9375
-efficientnet_b3_Homogeneous    0.9455   0.8838 |   0.0925 | 0.8696 0.7727 0.8529 0.9394 0.9841
-resnet50_Homogeneous           0.9344   0.8098 |   0.0531 | 0.8452 0.6393 0.7042 0.9062 0.9538
-=========================================================================================================
-
-
-===============================================================================================
- UNCERTAIN Detection — Validation by experts agreement
-===============================================================================================
-Model                          AUROC  F1-Unc  Flagged   E-Unc |  μ-unc(C)  μ-unc(U)
-                                               (pred)  (true) |   certain uncertain
------------------------------------------------------------------------------------------------
-Heterogeneous_Avg             0.9139  0.0000       0       1  |    0.0742    0.1510
-Heterogeneous_Weighted        0.9139  0.0000       0       1  |    0.0742    0.1510
-Class_Specific_Unique         0.8115  0.0000       1       1  |    0.0534    0.1109
-mobilenetv3_large_Homogeneous  0.8074  0.0000       0       1  |    0.0615    0.1192
-densenet121_Homogeneous       0.7500  0.0000       0       1  |    0.0446    0.0725
-Mega_Ensemble_TypD            0.7295  0.0000       0       1  |    0.0958    0.1278
-convnext_tiny_Homogeneous     0.6967  0.0000       1       1  |    0.0584    0.0779
-Class_Specific_With_Rep       0.6926  0.0000       0       1  |    0.0446    0.0567
-efficientnet_b3_Homogeneous   0.6475  0.0000       0       1  |    0.0923    0.1308
-resnet50_Homogeneous          0.6025  0.0000       1       1  |    0.0531    0.0595
-===============================================================================================
-AUROC: Separation ability certain/uncertain | μ-unc(C/U): Mean unc(x) in each group
+========================================================================================================================
+ UQ Detection — full dataset, thresholds from Mega Ensemble on CV set (95th percentile)
+========================================================================================================================
+Model                         AUROC_mn  AUPRC_mn  AUROC_mx  AUPRC_mx  AUROC_ent  AUPRC_ent |  E-Unc      Best
+------------------------------------------------------------------------------------------------------------------------
+mobilenetv3_large_Homogeneous    0.7597    0.0193    0.7377    0.0185     0.7722     0.0183 |     11   entropy
+Mega_Ensemble                   0.6614    0.0119    0.6767    0.0144     0.6921     0.0133 |     11   entropy
+resnet50_Homogeneous            0.6100    0.0114    0.6198    0.0112     0.6744     0.0156 |     11   entropy
+densenet121_Homogeneous         0.5626    0.0080    0.5626    0.0083     0.6607     0.0134 |     11   entropy
+convnext_tiny_Homogeneous       0.5693    0.0108    0.5763    0.0101     0.6448     0.0138 |     11   entropy
+efficientnet_b3_Homogeneous     0.6026    0.0128    0.6172    0.0259     0.5936     0.0096 |     11   unc_max
+Heterogeneous_Avg               0.5094    0.0072    0.5144    0.0074     0.6157     0.0108 |     11   entropy
+Heterogeneous_Weighted          0.5094    0.0072    0.5144    0.0074     0.6148     0.0107 |     11   entropy
+========================================================================================================================
+mn=unc_mean  mx=unc_max  ent=entropy  |  Best = signal with highest AUROC

@@ -99,7 +99,7 @@ def mann_whitney_uncertainty_test(uncertainty_certain, uncertainty_uncertain):
     )
 
     r_effect = 1.0 - (2.0 * float(stat)) / (n1 * n2)
-    significant = p_value < 0.05
+    significant = bool(p_value < 0.05)
 
     effect_label = (
         "large" if abs(r_effect) >= 0.5 else
