@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pandas as pd
-from scipy.optimize import linear_sum_assignment
+from collections import defaultdict
 from sklearn.metrics import (
     classification_report,
     roc_auc_score,
@@ -11,7 +11,6 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
 )
-from collections import defaultdict
 import config
 from models import build_model
 from dataset import load_dual_expert_samples, split_holdout, build_test_dataloader
@@ -142,31 +141,22 @@ def _run_forward(ensemble_model, loader):
     )
 
 
-def compute_thresholds_from_cv(mega_ensemble, cv_loader):
+def compute_thresholds_from_cv(ensemble_name, ensemble_model, cv_loader):
     pct = config.UNCERTAINTY_PERCENTILE
-    print(f"\n Computing uncertainty thresholds from CV set ({pct}th percentile)...")
+    print(f"  Computing uncertainty thresholds from CV set ({pct}th percentile) for {ensemble_name}...")
 
-    _, _, _, unc_mean_cv, unc_max_cv, entropy_cv = _run_forward(mega_ensemble, cv_loader)
+    _, _, _, unc_mean_cv, unc_max_cv, entropy_cv = _run_forward(ensemble_model, cv_loader)
 
     thresholds = {
         "unc_mean": float(np.percentile(unc_mean_cv, pct)),
         "unc_max": float(np.percentile(unc_max_cv, pct)),
         "entropy": float(np.percentile(entropy_cv, pct)),
         "percentile_used": pct,
-        "cv_samples": len(unc_mean_cv),
-        "source": "Mega Ensemble forward pass on CV set (training-side data)",
+        "cv_samples": len(unc_mean_cv)
     }
 
-    print(f"    CV samples:          {len(unc_mean_cv)}")
-    print(f"    Threshold unc_mean:  {thresholds['unc_mean']:.6f}")
-    print(f"    Threshold unc_max:   {thresholds['unc_max']:.6f}")
-    print(f"    Threshold entropy:   {thresholds['entropy']:.6f}")
-
-    path = config.ENSEMBLES_DIR / "uq_thresholds.json"
-    with open(path, "w") as f:
-        json.dump(thresholds, f, indent=2)
-    print(f"    Thresholds saved: {path}")
-
+    print(
+        f"    Thresholds -> unc_mean: {thresholds['unc_mean']:.4f}, unc_max: {thresholds['unc_max']:.4f}, entropy: {thresholds['entropy']:.4f}")
     return thresholds
 
 
@@ -234,7 +224,7 @@ def _eval_one_signal(signal_name, unc_scores, expert_labels, threshold):
 
 
 def evaluate_uncertainty_detection(ensemble_name, unc_mean, unc_max, entropy,
-                                   expert_agreement_labels, thresholds):
+                                   expert_agreement_labels, kl_labels_full, thresholds):
     n_total = len(unc_mean)
     n_exp_unc = int((expert_agreement_labels == config.UNCERTAIN_LABEL).sum())
 
@@ -242,18 +232,12 @@ def evaluate_uncertainty_detection(ensemble_name, unc_mean, unc_max, entropy,
     print(f"UQ VALIDATION: {ensemble_name}")
     print(f"{'=' * 65}")
     print(f"  Total samples (full dataset):     {n_total}")
-    print(f"  Expert-uncertain (ground truth):  {n_exp_unc}  "
-          f"({100 * n_exp_unc / n_total:.1f}%)")
-    print(f"  Thresholds (CV 95th percentile): "
-          f"unc_mean={thresholds['unc_mean']:.4f}  "
-          f"unc_max={thresholds['unc_max']:.4f}  "
-          f"entropy={thresholds['entropy']:.4f}")
+    print(f"  Expert-uncertain (ground truth):  {n_exp_unc}  ({100 * n_exp_unc / n_total:.1f}%)")
 
     results = {
         "ensemble_name": ensemble_name,
         "n_total": n_total,
         "n_expert_uncertain": n_exp_unc,
-        "threshold_source": "Mega Ensemble on CV set, 95th percentile per signal",
         "threshold_unc_mean": round(thresholds["unc_mean"], 6),
         "threshold_unc_max": round(thresholds["unc_max"], 6),
         "threshold_entropy": round(thresholds["entropy"], 6),
@@ -262,12 +246,20 @@ def evaluate_uncertainty_detection(ensemble_name, unc_mean, unc_max, entropy,
     for sig_name, scores in [("unc_mean", unc_mean), ("unc_max", unc_max), ("entropy", entropy)]:
         results.update(_eval_one_signal(sig_name, scores, expert_agreement_labels, thresholds[sig_name]))
 
+    # Wybór najlepszego sygnału by AUROC
     best_signal = max(["unc_mean", "unc_max", "entropy"], key=lambda s: results.get(f"auroc_{s}", 0.0))
     best_flags = ({"unc_mean": unc_mean, "unc_max": unc_max, "entropy": entropy}[best_signal] > thresholds[
         best_signal]).astype(int)
     results["best_signal_by_auroc"] = best_signal
 
+    # Breakdown KL dla oflagowanych
+    flagged_kls = kl_labels_full[best_flags == 1]
+    unique, counts = np.unique(flagged_kls, return_counts=True)
+    kl_counts = dict(zip(unique, counts))
+    kl_str = " : ".join([str(kl_counts.get(k, 0)) for k in range(config.NUM_CLASSES)])
+
     print(f"\n  Best signal by AUROC: {best_signal}")
+    print(f"  KL Breakdown for Flagged (KL0:KL1:KL2:KL3:KL4) = {kl_str}")
     print(classification_report(expert_agreement_labels, best_flags,
                                 labels=[config.CERTAIN_LABEL, config.UNCERTAIN_LABEL],
                                 target_names=config.AGREEMENT_CLASS_NAMES,
@@ -276,10 +268,10 @@ def evaluate_uncertainty_detection(ensemble_name, unc_mean, unc_max, entropy,
     with open(config.ENSEMBLES_DIR / f"{ensemble_name}_uq_detection.json", "w") as f:
         json.dump(results, f, indent=2)
 
-    return results
+    return results, best_flags
 
 
-def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_results):
+def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_results, consensus_df):
     df_kl = pd.DataFrame(kl_metrics_all)
 
     if "f1_per_class" in df_kl.columns:
@@ -306,6 +298,7 @@ def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_results):
         df_kl.to_excel(writer, sheet_name="KL_Classification", index=False)
         df_uq.to_excel(writer, sheet_name="UQ_Detection", index=False)
         pd.DataFrame(mw_results).to_excel(writer, sheet_name="Mann_Whitney_Test", index=False)
+        consensus_df.to_excel(writer, sheet_name="Consensus_Matrix", index=False)
     print(f"\n  Master results saved: {excel_path}")
 
 
@@ -330,7 +323,7 @@ def print_kl_summary_table(all_kl_metrics):
 
 def print_uq_detection_table(all_uq_results):
     print("\n" + "=" * 120)
-    print(" UQ Detection — full dataset, thresholds from Mega Ensemble on CV set (95th percentile)")
+    print(" UQ Detection — full dataset (Independent CV thresholds)")
     print("=" * 120)
     print(f"{'Model':<28} "
           f"{'AUROC_mn':>9} {'AUPRC_mn':>9} "
@@ -371,6 +364,8 @@ def main():
     full_loader = build_test_dataloader(all_dual_samples)
 
     expert_agreement_labels = np.array([s[2] for s in all_dual_samples])
+    kl_labels_full = np.array([s[1] for s in all_dual_samples])
+
     n_c = int((expert_agreement_labels == config.CERTAIN_LABEL).sum())
     n_u = int((expert_agreement_labels == config.UNCERTAIN_LABEL).sum())
 
@@ -383,30 +378,32 @@ def main():
     np.save(config.ENSEMBLES_DIR / "expert_agreement_labels.npy", expert_agreement_labels)
 
     print("\n" + "=" * 65)
-    print(" STEP 1: Computing uncertainty thresholds (Mega on CV set)")
+    print(" STEP 1 & 2: Evaluate Ensembles (with specific CV thresholds)")
     print("=" * 65)
-    mega_for_threshold = build_mega_ensemble()
-    thresholds = compute_thresholds_from_cv(mega_for_threshold, cv_loader)
-    del mega_for_threshold
-    torch.cuda.empty_cache()
 
-    print("\n" + "=" * 65)
-    print(" STEP 2: Evaluate Ensembles")
-    print("=" * 65)
     kl_metrics_all = []
     uq_results_all = []
     all_unc_max_dict: dict[str, np.ndarray] = {}
+    all_flags_dict = {}
 
     def _run(name, ensemble):
+        # Najpierw wyliczamy próg tylko dla TEGO ensembla
+        thresholds = compute_thresholds_from_cv(name, ensemble, cv_loader)
+
+        # Oceniamy KL i pobieramy sygnały niepewności
         metrics, unc_mean, unc_max, entropy, _ = evaluate_ensemble(
             name, ensemble, holdout_loader, full_loader)
         kl_metrics_all.append(metrics)
 
-        uq_results_all.append(evaluate_uncertainty_detection(
+        # Oceniamy sygnały UQ względem wyliczonych progów
+        uq_res, best_flags = evaluate_uncertainty_detection(
             name, unc_mean, unc_max, entropy,
-            expert_agreement_labels, thresholds))
+            expert_agreement_labels, kl_labels_full, thresholds)
 
+        uq_results_all.append(uq_res)
         all_unc_max_dict[name] = unc_max
+        all_flags_dict[name] = best_flags
+
         del ensemble
         torch.cuda.empty_cache()
 
@@ -417,6 +414,21 @@ def main():
     _run("Heterogeneous_Weighted", build_weighted_ensemble())
     _run("Mega_Ensemble", build_mega_ensemble())
 
+    # Generowanie Macierzy Konsensusu
+    df_data = {
+        "Image_Name": [s[0].name for s in all_dual_samples],
+        "KL_Label": [config.CLASS_DISPLAY_NAMES[kl] for kl in kl_labels_full],
+        "Expert_Uncertain": expert_agreement_labels
+    }
+    for name, flags in all_flags_dict.items():
+        df_data[name] = flags
+
+    consensus_df = pd.DataFrame(df_data)
+    ensemble_cols = list(all_flags_dict.keys())
+    consensus_df["Total_Flags"] = consensus_df[ensemble_cols].sum(axis=1)
+    consensus_df = consensus_df.sort_values(by=["Total_Flags", "Expert_Uncertain"], ascending=[False, False])
+
+    # Mann-Whitney U Test
     from evaluate import mann_whitney_uncertainty_test
 
     mega_uq = next(r for r in uq_results_all if r["ensemble_name"] == "Mega_Ensemble")
@@ -436,11 +448,13 @@ def main():
     mw_result = mann_whitney_uncertainty_test(unc_for_mw[mask_c], unc_for_mw[mask_u])
     mw_result["ensemble_name"] = "Mega_Ensemble"
     mw_result["unc_signal"] = best_sig
+    # Zabezpieczenie p_value na wypadek typu numpy.bool_ z scipy (wymuszamy pythonowy bool)
+    mw_result["p_significant"] = bool(mw_result["p_value"] < 0.05)
 
     with open(config.ENSEMBLES_DIR / "Mega_Ensemble_mann_whitney.json", "w") as f:
         json.dump(mw_result, f, indent=2)
 
-    save_master_results_to_excel(kl_metrics_all, uq_results_all, [mw_result])
+    save_master_results_to_excel(kl_metrics_all, uq_results_all, [mw_result], consensus_df)
     print_kl_summary_table(kl_metrics_all)
     print_uq_detection_table(uq_results_all)
 
