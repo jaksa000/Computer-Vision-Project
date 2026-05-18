@@ -26,12 +26,7 @@ except AttributeError:
     _RESAMPLE = Image.LANCZOS
 
 
-def _image_to_vector(path: Path) -> np.ndarray:
-    """
-    Load image, apply EXIF orientation, convert to grayscale,
-    resize to 128×128, return flat float32 vector in [0, 1].
-    Invariant to PNG metadata differences between expert folders.
-    """
+def image_to_vector(path: Path) -> np.ndarray:
     with Image.open(path) as img:
         img = ImageOps.exif_transpose(img)
         img = img.convert("L")
@@ -62,21 +57,9 @@ def load_image_paths(data_root=config.DATA_ROOT, expert=config.EXPERT):
 
 # =============================================================================
 # FUNCTION — dual-expert labelling via Hungarian image matching
-#
-# Strategy:
-#   1. Load every image from both expert folders as a 128×128 grayscale vector.
-#   2. Compute the full pairwise MSE cost matrix using a dot-product expansion
-#      to avoid allocating a large 3-D array.
-#   3. Solve the linear sum assignment problem (Hungarian / Kuhn-Munkres) for a
-#      globally optimal, order-independent bijective mapping between experts.
-#   4. If both experts placed the matched pair in the same KL class → CERTAIN.
-#      If they placed it in different KL classes → UNCERTAIN.
-#
-# The result is cached to a CSV file (config.MATCH_CACHE_CSV).  On subsequent
-# runs the cache is loaded directly, avoiding the O(N²) image-decoding step.
 # =============================================================================
 
-def _load_expert_records(expert_root: Path):
+def load_expert_records(expert_root: Path):
     records = []
     for label_idx, class_name in enumerate(config.CLASS_NAMES):
         class_folder = expert_root / class_name
@@ -87,18 +70,14 @@ def _load_expert_records(expert_root: Path):
             if img_path.suffix.lower() != ".png":
                 continue
             try:
-                vec = _image_to_vector(img_path)
+                vec = image_to_vector(img_path)
                 records.append({"path": img_path, "label": label_idx, "vector": vec})
             except Exception as e:
                 print(f"  WARNING: could not load {img_path}: {e}")
     return records
 
 
-def _hungarian_match(records_a, records_b):
-    """
-    Build pairwise MSE cost matrix and solve with the Hungarian algorithm.
-    Uses the identity ||a-b||² = ||a||² + ||b||² - 2·a·bᵀ for efficiency.
-    """
+def hungarian_match(records_a, records_b):
     A_mat = np.stack([r["vector"] for r in records_a])   # [N_a, D]
     B_mat = np.stack([r["vector"] for r in records_b])   # [N_b, D]
 
@@ -115,7 +94,7 @@ def _hungarian_match(records_a, records_b):
     ]
 
 
-def _save_cache(matches, cache_path: Path):
+def save_cache(matches, cache_path: Path):
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cache_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -127,11 +106,7 @@ def _save_cache(matches, cache_path: Path):
     print(f"  Match cache saved: {cache_path}")
 
 
-def _load_cache(cache_path: Path):
-    """
-    Returns list of (path_a, label_a, agreement_label) triples,
-    or None if the cache file does not exist.
-    """
+def load_cache(cache_path: Path):
     if not cache_path.exists():
         return None
 
@@ -150,44 +125,9 @@ def _load_cache(cache_path: Path):
     return samples
 
 
-def _print_expert_confusion_matrix(matched_triples):
-    disagreements = defaultdict(int)
-    for rec_a, rec_b, _ in matched_triples:
-        if rec_a["label"] != rec_b["label"]:
-            disagreements[(rec_a["label"], rec_b["label"])] += 1
-
-    if not disagreements:
-        print("  No disagreements found.")
-        return
-
-    print("\n  Expert Confusion Matrix (disagreements only):")
-    header = "  Expert-I \\ II |" + "".join(f"  KL{j}" for j in range(config.NUM_CLASSES))
-    print(header)
-    print("  " + "-" * (len(header) - 2))
-    for i in range(config.NUM_CLASSES):
-        row = [disagreements.get((i, j), 0) for j in range(config.NUM_CLASSES)]
-        if any(row[j] > 0 for j in range(config.NUM_CLASSES) if j != i):
-            print(f"  KL{i}          |" + "".join(f"  {v:3d}" for v in row))
-
-
-def load_dual_expert_samples(
-        data_root=config.DATA_ROOT,
-        expert_1=config.EXPERT,
-        expert_2=config.EXPERT_II,
-        cache_path=config.MATCH_CACHE_CSV,
-        force_rematch=False,
-):
-    """
-    Returns list of triples: (path_expert1, kl_label, agreement_label).
-
-    On first call the Hungarian matching runs and the result is written to
-    cache_path.  All subsequent calls load from that CSV, skipping the
-    image-decoding and optimisation step entirely.
-    Pass force_rematch=True to bypass the cache and rerun matching.
-    """
-    # --- Try cache first ---
+def load_dual_expert_samples(data_root=config.DATA_ROOT,expert_1=config.EXPERT,expert_2=config.EXPERT_II,cache_path=config.MATCH_CACHE_CSV,force_rematch=False,):
     if not force_rematch:
-        cached = _load_cache(cache_path)
+        cached = load_cache(cache_path)
         if cached is not None:
             certain   = sum(1 for _, _, a in cached if a == config.CERTAIN_LABEL)
             uncertain = sum(1 for _, _, a in cached if a == config.UNCERTAIN_LABEL)
@@ -195,22 +135,18 @@ def load_dual_expert_samples(
             print(f"  Certain: {certain}  Uncertain: {uncertain}")
             return cached
 
-    # --- Full matching ---
     print("\n" + "=" * 60)
     print("DUAL-EXPERT LABELLING — Hungarian image matching (128×128 MSE)")
     print("=" * 60)
-    print(f"  Loading Expert-I  ({expert_1})...")
-    records_a = _load_expert_records(data_root / expert_1)
-    print(f"  Loading Expert-II ({expert_2})...")
-    records_b = _load_expert_records(data_root / expert_2)
-
+    print(f"  Loading Expert-I  ({expert_1}.")
+    records_a = load_expert_records(data_root / expert_1)
+    print(f"  Loading Expert-II ({expert_2})")
+    records_b = load_expert_records(data_root / expert_2)
     print(f"\n  Expert-I images:  {len(records_a)}")
     print(f"  Expert-II images: {len(records_b)}")
-    print("  Running Hungarian algorithm (globally optimal assignment)...")
 
-    matches = _hungarian_match(records_a, records_b)
-    _save_cache(matches, cache_path)
-
+    matches = hungarian_match(records_a, records_b)
+    save_cache(matches, cache_path)
     matched_samples = []
     for rec_a, rec_b, _ in matches:
         agreement = (
@@ -223,12 +159,9 @@ def load_dual_expert_samples(
     certain_count   = sum(1 for _, _, a in matched_samples if a == config.CERTAIN_LABEL)
     uncertain_count = sum(1 for _, _, a in matched_samples if a == config.UNCERTAIN_LABEL)
     total           = len(matched_samples)
-
     print(f"\n  Images matched:               {total}")
     print(f"  Certain  (experts agree):     {certain_count:4d}  ({100*certain_count/total:.1f}%)")
     print(f"  Uncertain (experts disagree): {uncertain_count:4d}  ({100*uncertain_count/total:.1f}%)")
-
-    _print_expert_confusion_matrix(matches)
     return matched_samples
 
 
@@ -312,7 +245,6 @@ def build_fold_dataloaders(cv_samples, fold_idx):
 def get_transforms(split):
     img_size       = config.IMAGE_SIZE
     padding_buffer = 20
-
     if split == "train":
         return A.Compose([
             A.Resize(img_size + padding_buffer, img_size + padding_buffer,
@@ -340,12 +272,6 @@ def get_transforms(split):
 # =============================================================================
 
 class KneeXrayDataset(Dataset):
-    """
-    Supports both (path, kl_label) and (path, kl_label, agreement_label) tuples.
-    __getitem__ always returns (image_tensor, kl_label).
-    agreement_label is accessible via get_agreement_labels() for UQ analysis.
-    """
-
     def __init__(self, samples, transform=None):
         self.samples   = samples
         self.transform = transform
