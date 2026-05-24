@@ -24,23 +24,23 @@ Ensemble Evaluation and Uncertainty Quantification
  Building Homogeneous Ensemble: resnet50
 
  Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
+  Parameters: 23,518,277 total, 23,518,277 trainable
+
+ Building model: resnet50
 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-model.safetensors: 100% 102M/102M [00:03<00:00, 31.0MB/s]
   Parameters: 23,518,277 total, 23,518,277 trainable
 
  Building model: resnet50
   Parameters: 23,518,277 total, 23,518,277 trainable
-
- Building model: resnet50
-  Parameters: 23,518,277 total, 23,518,277 trainable
-
- Building model: resnet50
-  Parameters: 23,518,277 total, 23,518,277 trainable
-
- Building model: resnet50
-  Parameters: 23,518,277 total, 23,518,277 trainable
-  Computing uncertainty thresholds from CV set (95th percentile) for resnet50_Homogeneous...
-    Thresholds -> unc_mean: 0.1184, unc_max: 0.2646, entropy: 1.2401
+  Computing CV uncertainty scores for resnet50_Homogeneous...
+    CV samples: 1402
+  [resnet50_Homogeneous] Thresholds (95th pct) -> unc_mean: 0.1184,  unc_max: 0.2646,  entropy: 1.2401
 
 Evaluating: resnet50_Homogeneous
   [Holdout]  Kappa: 0.9334  F1: 0.8344  ECE: 0.1245  Brier: 0.0519
@@ -70,7 +70,6 @@ weighted avg       0.99      0.95      0.97      1650
  Building Homogeneous Ensemble: efficientnet_b3
 
  Building model: efficientnet_b3
-model.safetensors: 100% 49.3M/49.3M [00:01<00:00, 30.5MB/s]
   Parameters: 10,703,917 total, 10,703,917 trainable
 
  Building model: efficientnet_b3
@@ -84,8 +83,9 @@ model.safetensors: 100% 49.3M/49.3M [00:01<00:00, 30.5MB/s]
 
  Building model: efficientnet_b3
   Parameters: 10,703,917 total, 10,703,917 trainable
-  Computing uncertainty thresholds from CV set (95th percentile) for efficientnet_b3_Homogeneous...
-    Thresholds -> unc_mean: 0.1799, unc_max: 0.3804, entropy: 1.1139
+  Computing CV uncertainty scores for efficientnet_b3_Homogeneous...
+    CV samples: 1402
+  [efficientnet_b3_Homogeneous] Thresholds (95th pct) -> unc_mean: 0.1799,  unc_max: 0.3804,  entropy: 1.1139
 
 Evaluating: efficientnet_b3_Homogeneous
   [Holdout]  Kappa: 0.9658  F1: 0.9271  ECE: 0.1302  Brier: 0.0328
@@ -115,7 +115,6 @@ weighted avg       0.99      0.95      0.97      1650
  Building Homogeneous Ensemble: densenet121
 
  Building model: densenet121
-model.safetensors: 100% 32.3M/32.3M [00:01<00:00, 20.0MB/s]
   Parameters: 6,958,981 total, 6,958,981 trainable
 
  Building model: densenet121
@@ -129,8 +128,9 @@ model.safetensors: 100% 32.3M/32.3M [00:01<00:00, 20.0MB/s]
 
  Building model: densenet121
   Parameters: 6,958,981 total, 6,958,981 trainable
-  Computing uncertainty thresholds from CV set (95th percentile) for densenet121_Homogeneous...
-    Thresholds -> unc_mean: 0.1273, unc_max: 0.2957, entropy: 1.0791
+  Computing CV uncertainty scores for densenet121_Homogeneous...
+    CV samples: 1402
+  [densenet121_Homogeneous] Thresholds (95th pct) -> unc_mean: 0.1273,  unc_max: 0.2957,  entropy: 1.0791
 
 Evaluating: densenet121_Homogeneous
   [Holdout]  Kappa: 0.9809  F1: 0.9515  ECE: 0.1155  Brier: 0.0222
@@ -160,7 +160,6 @@ weighted avg       0.99      0.95      0.97      1650
  Building Homogeneous Ensemble: mobilenetv3_large
 
  Building model: mobilenetv3_large
-model.safetensors: 100% 22.1M/22.1M [00:01<00:00, 13.7MB/s]
   Parameters: 4,208,437 total, 4,208,437 trainable
 
  Building model: mobilenetv3_large
@@ -174,8 +173,9 @@ model.safetensors: 100% 22.1M/22.1M [00:01<00:00, 13.7MB/s]
 
  Building model: mobilenetv3_large
   Parameters: 4,208,437 total, 4,208,437 trainable
-  Computing uncertainty thresholds from CV set (95th percentile) for mobilenetv3_large_Homogeneous...
-    Thresholds -> unc_mean: 0.1518, unc_max: 0.3537, entropy: 0.9673
+  Computing CV uncertainty scores for mobilenetv3_large_Homogeneous...
+    CV samples: 1402
+  [mobilenetv3_large_Homogeneous] Thresholds (95th pct) -> unc_mean: 0.1518,  unc_max: 0.3537,  entropy: 0.9673
 
 Evaluating: mobilenetv3_large_Homogeneous
   [Holdout]  Kappa: 0.9808  F1: 0.9479  ECE: 0.0894  Brier: 0.0203
@@ -205,7 +205,6 @@ weighted avg       0.99      0.94      0.96      1650
  Building Homogeneous Ensemble: convnext_tiny
 
  Building model: convnext_tiny
-model.safetensors: 100% 114M/114M [00:02<00:00, 43.7MB/s]
   Parameters: 27,823,973 total, 27,823,973 trainable
 
  Building model: convnext_tiny
@@ -219,8 +218,9 @@ model.safetensors: 100% 114M/114M [00:02<00:00, 43.7MB/s]
 
  Building model: convnext_tiny
   Parameters: 27,823,973 total, 27,823,973 trainable
-  Computing uncertainty thresholds from CV set (95th percentile) for convnext_tiny_Homogeneous...
-    Thresholds -> unc_mean: 0.1367, unc_max: 0.3239, entropy: 0.8787
+  Computing CV uncertainty scores for convnext_tiny_Homogeneous...
+    CV samples: 1402
+  [convnext_tiny_Homogeneous] Thresholds (95th pct) -> unc_mean: 0.1367,  unc_max: 0.3239,  entropy: 0.8787
 
 Evaluating: convnext_tiny_Homogeneous
   [Holdout]  Kappa: 0.9725  F1: 0.9108  ECE: 0.0894  Brier: 0.0294
@@ -263,8 +263,9 @@ weighted avg       0.99      0.94      0.96      1650
 
  Building model: convnext_tiny
   Parameters: 27,823,973 total, 27,823,973 trainable
-  Computing uncertainty thresholds from CV set (95th percentile) for Heterogeneous_Avg...
-    Thresholds -> unc_mean: 0.1515, unc_max: 0.3460, entropy: 0.9982
+  Computing CV uncertainty scores for Heterogeneous_Avg...
+    CV samples: 1402
+  [Heterogeneous_Avg] Thresholds (95th pct) -> unc_mean: 0.1515,  unc_max: 0.3460,  entropy: 0.9982
 
 Evaluating: Heterogeneous_Avg
   [Holdout]  Kappa: 0.9819  F1: 0.9505  ECE: 0.1359  Brier: 0.0242
@@ -307,8 +308,9 @@ weighted avg       0.99      0.94      0.97      1650
 
  Building model: convnext_tiny
   Parameters: 27,823,973 total, 27,823,973 trainable
-  Computing uncertainty thresholds from CV set (95th percentile) for Heterogeneous_Weighted...
-    Thresholds -> unc_mean: 0.1515, unc_max: 0.3460, entropy: 0.9931
+  Computing CV uncertainty scores for Heterogeneous_Weighted...
+    CV samples: 1402
+  [Heterogeneous_Weighted] Thresholds (95th pct) -> unc_mean: 0.1515,  unc_max: 0.3460,  entropy: 0.9931
 
 Evaluating: Heterogeneous_Weighted
   [Holdout]  Kappa: 0.9819  F1: 0.9505  ECE: 0.1335  Brier: 0.0238
@@ -412,8 +414,9 @@ weighted avg       0.99      0.94      0.96      1650
  Building model: convnext_tiny
   Parameters: 27,823,973 total, 27,823,973 trainable
   Loaded 25 models.
-  Computing uncertainty thresholds from CV set (95th percentile) for Mega_Ensemble...
-    Thresholds -> unc_mean: 0.1649, unc_max: 0.3235, entropy: 1.1025
+  Computing CV uncertainty scores for Mega_Ensemble...
+    CV samples: 1402
+  [Mega_Ensemble] Thresholds (95th pct) -> unc_mean: 0.1649,  unc_max: 0.3235,  entropy: 1.1025
 
 Evaluating: Mega_Ensemble
   [Holdout]  Kappa: 0.9830  F1: 0.9585  ECE: 0.1584  Brier: 0.0262
@@ -439,6 +442,40 @@ UQ VALIDATION: Mega_Ensemble
    macro avg       0.50      0.52      0.50      1650
 weighted avg       0.99      0.94      0.96      1650
 
+
+=================================================================
+ STEP 3: Threshold Sensitivity Analysis (percentile sweep + 3σ)
+=================================================================
+
+  Threshold sensitivity sweep: resnet50_Homogeneous
+    303 threshold combinations evaluated.
+
+  Threshold sensitivity sweep: efficientnet_b3_Homogeneous
+    303 threshold combinations evaluated.
+
+  Threshold sensitivity sweep: densenet121_Homogeneous
+    303 threshold combinations evaluated.
+
+  Threshold sensitivity sweep: mobilenetv3_large_Homogeneous
+    303 threshold combinations evaluated.
+
+  Threshold sensitivity sweep: convnext_tiny_Homogeneous
+    303 threshold combinations evaluated.
+
+  Threshold sensitivity sweep: Heterogeneous_Avg
+    303 threshold combinations evaluated.
+
+  Threshold sensitivity sweep: Heterogeneous_Weighted
+    303 threshold combinations evaluated.
+
+  Threshold sensitivity sweep: Mega_Ensemble
+    303 threshold combinations evaluated.
+  Sensitivity CSVs saved to results/ensembles
+
+=================================================================
+ STEP 4: Building Consensus Matrices
+=================================================================
+  Consensus CSVs saved to results/ensembles
 
   Mann-Whitney U test — Mega Ensemble  [entropy]
     n_certain=1639,  n_uncertain=11
@@ -482,3 +519,21 @@ Heterogeneous_Avg               0.5094    0.0072    0.5144    0.0074     0.6157 
 Heterogeneous_Weighted          0.5094    0.0072    0.5144    0.0074     0.6148     0.0107 |     11   entropy
 ========================================================================================================================
 mn=unc_mean  mx=unc_max  ent=entropy  |  Best = signal with highest AUROC
+
+====================================================================================================
+ Threshold Sensitivity Summary — Mega_Ensemble
+====================================================================================================
+Method                 Signal        Percentile   Threshold  n_flag   %flag    Prec     Rec      F1
+----------------------------------------------------------------------------------------------------
+default_95pct          unc_mean            95.0      0.1649      79     4.8  0.0000  0.0000  0.0000
+default_95pct          unc_max             95.0      0.3235      77     4.7  0.0000  0.0000  0.0000
+default_95pct          entropy             95.0      1.1025      85     5.2  0.0118  0.0909  0.0209
+sigma3                 unc_mean            μ+3σ      0.2301       3     0.2  0.0000  0.0000  0.0000
+sigma3                 unc_max             μ+3σ      0.4642       0     0.0  0.0000  0.0000  0.0000
+sigma3                 entropy             μ+3σ      1.5052       0     0.0  0.0000  0.0000  0.0000
+best_f1_percentile     entropy             93.4      1.0599     112     6.8  0.0179  0.1818  0.0326
+best_f1_percentile     unc_max             90.5      0.3059     150     9.1  0.0267  0.3636  0.0497
+best_f1_percentile     unc_mean            91.7      0.1530     141     8.6  0.0142  0.1818  0.0263
+====================================================================================================
+
+Results saved to: results
