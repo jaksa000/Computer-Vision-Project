@@ -1,4 +1,5 @@
 import csv
+import json
 import hashlib
 from pathlib import Path
 from collections import Counter, defaultdict
@@ -44,10 +45,12 @@ def load_image_paths(data_root=config.DATA_ROOT, expert=config.EXPERT):
     samples = []
     for label_idx, class_name in enumerate(config.CLASS_NAMES):
         class_folder = expert_folder / class_name
-        images_in_folder = [
+        # Sorted path order is critical: the same random seed only produces
+        # the same train/holdout split if the input sample order is stable.
+        images_in_folder = sorted([
             f for f in class_folder.iterdir()
             if f.suffix.lower() == ".png"
-        ]
+        ])
         for img_path in images_in_folder:
             samples.append((img_path, label_idx))
         print(f"  Class {label_idx} ({class_name}): {len(images_in_folder)} images")
@@ -166,10 +169,229 @@ def load_dual_expert_samples(data_root=config.DATA_ROOT,expert_1=config.EXPERT,e
 
 
 # =============================================================================
+# SPLIT MANIFEST HELPERS
+# =============================================================================
+
+def _default_split_manifest_path() -> Path:
+    """Return the project-wide split manifest path."""
+    return getattr(config, "SPLIT_MANIFEST_JSON", config.RESULTS_DIR / "split_manifest.json")
+
+
+def _normalise_path_for_manifest(path) -> str:
+    """
+    Convert a path to a stable, platform-independent key.
+
+    The manifest intentionally stores relative/project paths rather than
+    absolute resolved paths, so it remains portable across machines as long as
+    the project directory structure is preserved.
+    """
+    return Path(path).as_posix().replace("\\", "/")
+
+
+def _sample_path_key(sample) -> str:
+    return _normalise_path_for_manifest(sample[0])
+
+
+def sort_samples_for_split(samples):
+    """
+    Sort samples deterministically before any train/test split is computed.
+
+    This removes dependence on filesystem iteration order.  It works for both
+    two-field samples (path, label) and three-field samples
+    (path, label, expert_agreement).
+    """
+    return sorted(samples, key=lambda s: (_sample_path_key(s), int(s[1])))
+
+
+def save_split_manifest(cv_samples, test_samples, manifest_path=None):
+    """
+    Save the exact CV and holdout image paths used during training.
+
+    main.py calls this once after creating the single-expert split.  ensemble.py
+    then loads the same file and applies the identical holdout by path, which
+    prevents silent train/test mismatch caused by different loader orderings or
+    by dual-expert matching.
+    """
+    manifest_path = Path(manifest_path or _default_split_manifest_path())
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    labels_by_path = {}
+    agreement_by_path = {}
+    for sample in list(cv_samples) + list(test_samples):
+        key = _sample_path_key(sample)
+        labels_by_path[key] = int(sample[1])
+        if len(sample) >= 3:
+            agreement_by_path[key] = int(sample[2])
+
+    manifest = {
+        "description": (
+            "Persistent train/CV vs holdout split manifest.  The holdout_paths "
+            "list is the source of truth reused by ensemble.py."
+        ),
+        "random_seed": int(config.RANDOM_SEED),
+        "test_ratio": float(config.TEST_RATIO),
+        "num_folds": int(config.NUM_FOLDS),
+        "expert": str(config.EXPERT),
+        "n_cv": int(len(cv_samples)),
+        "n_holdout": int(len(test_samples)),
+        "cv_paths": sorted(_sample_path_key(s) for s in cv_samples),
+        "holdout_paths": sorted(_sample_path_key(s) for s in test_samples),
+        "labels_by_path": labels_by_path,
+    }
+    if agreement_by_path:
+        manifest["agreement_by_path"] = agreement_by_path
+
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"  Split manifest saved: {manifest_path}")
+    return manifest_path
+
+
+def load_split_manifest(manifest_path=None):
+    """Load the persistent split manifest created by main.py."""
+    manifest_path = Path(manifest_path or _default_split_manifest_path())
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"Split manifest not found: {manifest_path}\n"
+            "Run main.py once with the updated code so it can save the exact "
+            "training/holdout split before running ensemble.py."
+        )
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def split_holdout_from_manifest(all_samples, manifest_path=None, strict=True):
+    """
+    Reconstruct CV and holdout sets using the saved manifest.
+
+    This is the function ensemble.py should use.  It guarantees that the
+    ensemble holdout is path-identical to the holdout generated during training
+    in main.py.
+    """
+    manifest = load_split_manifest(manifest_path)
+    holdout_paths = set(manifest.get("holdout_paths", []))
+    if not holdout_paths:
+        raise RuntimeError("Split manifest does not contain any holdout_paths.")
+
+    samples_sorted = sort_samples_for_split(all_samples)
+    available = {_sample_path_key(sample): sample for sample in samples_sorted}
+
+    missing = sorted(holdout_paths - set(available.keys()))
+    if missing and strict:
+        examples = "\n  ".join(missing[:10])
+        raise RuntimeError(
+            f"Split manifest mismatch: {len(missing)} holdout image(s) from "
+            f"the training manifest are missing in the current dataset.\n"
+            f"First missing paths:\n  {examples}\n"
+            "This usually means that the single-expert and dual-expert loaders "
+            "do not expose the same Expert-I image paths, or that the data root changed."
+        )
+
+    test_samples = [available[p] for p in manifest["holdout_paths"] if p in available]
+    cv_samples = [s for s in samples_sorted if _sample_path_key(s) not in holdout_paths]
+
+    verify_no_overlap(cv_samples, test_samples)
+    compare_holdout_with_manifest(test_samples, manifest_path=manifest_path, strict=strict)
+
+    print("\n" + "=" * 60)
+    print(" DATA SPLIT — loaded from persistent manifest")
+    print("=" * 60)
+    print(f"  K-Fold CV data: {len(cv_samples)} images")
+    print(f"  Hold-out data:  {len(test_samples)} images")
+    print(f"  Manifest:       {Path(manifest_path or _default_split_manifest_path())}")
+
+    return cv_samples, test_samples
+
+
+def compare_holdout_with_manifest(test_samples, manifest_path=None, strict=True):
+    """
+    Verify that a holdout set is exactly equal to the manifest holdout paths.
+    """
+    manifest = load_split_manifest(manifest_path)
+    expected = set(manifest.get("holdout_paths", []))
+    actual = set(_sample_path_key(s) for s in test_samples)
+
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+
+    if missing or unexpected:
+        message = (
+            "Holdout mismatch against split manifest.\n"
+            f"  Missing from current holdout: {len(missing)}\n"
+            f"  Unexpected in current holdout: {len(unexpected)}"
+        )
+        if missing:
+            message += "\n  First missing:\n  " + "\n  ".join(missing[:5])
+        if unexpected:
+            message += "\n  First unexpected:\n  " + "\n  ".join(unexpected[:5])
+        if strict:
+            raise RuntimeError(message)
+        print("  WARNING: " + message.replace("\n", "\n  "))
+    else:
+        print(f"  [OK] Holdout matches split manifest exactly ({len(actual)} images).")
+
+
+# =============================================================================
+# FUNCTION — no-overlap verification
+# Called inside split_holdout to assert data integrity.
+# =============================================================================
+
+def verify_no_overlap(cv_samples, test_samples):
+    """
+    Assert that no image path appears in both the CV and holdout splits.
+    Raises RuntimeError on violation; prints a confirmation on success.
+    This check guards against silent data leakage when the two loading
+    functions (load_all_samples / load_dual_expert_samples) produce
+    differently-ordered lists from the same image files.
+    """
+    cv_paths   = {str(s[0]) for s in cv_samples}
+    test_paths = {str(s[0]) for s in test_samples}
+    overlap    = cv_paths & test_paths
+    if overlap:
+        examples = "\n  ".join(sorted(overlap)[:5])
+        raise RuntimeError(
+            f"DATA LEAKAGE DETECTED: {len(overlap)} image(s) appear in both "
+            f"the CV and holdout splits.\n  First offenders:\n  {examples}"
+        )
+    print(f"  [OK] Split integrity verified — no overlap between "
+          f"CV ({len(cv_paths)}) and holdout ({len(test_paths)}) sets.")
+
+
+# =============================================================================
 # FUNCTION — data split (holdout)
 # =============================================================================
 
-def split_holdout(all_samples):
+def split_holdout(all_samples, save_manifest=False, use_manifest=False,
+                  manifest_path=None, strict_manifest=True):
+    """
+    Create or reuse the project holdout split.
+
+    Parameters
+    ----------
+    all_samples : list
+        Samples in the form (path, label) or (path, label, agreement).
+    save_manifest : bool
+        If True, save the generated split to results/split_manifest.json.
+        main.py should use this mode during training.
+    use_manifest : bool
+        If True, ignore random splitting and reconstruct the split from the
+        saved manifest. ensemble.py should use this mode.
+    manifest_path : Path or None
+        Optional explicit manifest path.
+    strict_manifest : bool
+        If True, raise an error on any manifest mismatch.
+    """
+    if use_manifest:
+        return split_holdout_from_manifest(
+            all_samples,
+            manifest_path=manifest_path,
+            strict=strict_manifest,
+        )
+
+    # Deterministic pre-sorting is essential.  It makes the split independent
+    # of filesystem iteration order and of minor loader implementation details.
+    all_samples = sort_samples_for_split(all_samples)
     labels = [s[1] for s in all_samples]
     cv_samples, test_samples = train_test_split(
         all_samples,
@@ -182,6 +404,12 @@ def split_holdout(all_samples):
     print("=" * 60)
     print(f"  K-Fold CV data (85%): {len(cv_samples)} images")
     print(f"  Hold-out data  (15%): {len(test_samples)} images")
+    verify_no_overlap(cv_samples, test_samples)
+
+    if save_manifest:
+        save_split_manifest(cv_samples, test_samples, manifest_path=manifest_path)
+        compare_holdout_with_manifest(test_samples, manifest_path=manifest_path, strict=True)
+
     return cv_samples, test_samples
 
 

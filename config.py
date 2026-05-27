@@ -20,6 +20,10 @@ LOGS_DIR              = RESULTS_DIR / "logs"
 # CSV cache produced by load_dual_expert_samples() on first run.
 MATCH_CACHE_CSV = RESULTS_DIR / "expert_matches_cache.csv"
 
+# Persistent split manifest shared by main.py and ensemble.py.
+# main.py creates it; ensemble.py reuses it to guarantee the identical holdout set.
+SPLIT_MANIFEST_JSON = RESULTS_DIR / "split_manifest.json"
+
 # =============================================================================
 # Classes
 # =============================================================================
@@ -56,12 +60,15 @@ RANDOM_SEED = 108
 
 # =============================================================================
 # Training
+# NUM_EPOCHS increased 20 → 30 to give models more room to converge.
+# PATIENCE  increased  5 → 8  so early stopping doesn't fire before the
+# LR scheduler (patience=3 in train.py) has a chance to reduce the rate twice.
 # =============================================================================
 BATCH_SIZE    = 64
-NUM_EPOCHS    = 20
+NUM_EPOCHS    = 30
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY  = 1e-4
-PATIENCE      = 5
+PATIENCE      = 8
 
 # =============================================================================
 # Device

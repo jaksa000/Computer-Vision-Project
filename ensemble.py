@@ -12,8 +12,13 @@ from sklearn.metrics import (
 )
 import config
 from models import build_model
-from dataset import load_dual_expert_samples, split_holdout, build_test_dataloader
-from evaluate import compute_metrics, compute_calibration_metrics
+from dataset import load_dual_expert_samples, split_holdout, build_test_dataloader, verify_no_overlap
+from evaluate import (
+    compute_metrics,
+    compute_calibration_metrics,
+    get_predictions,
+    mann_whitney_all_signals,
+)
 
 
 # =============================================================================
@@ -28,7 +33,7 @@ class SimpleEnsemble(nn.Module):
     @torch.no_grad()
     def forward(self, x, return_std=False):
         all_probs = [torch.softmax(m(x), dim=1) for m in self.models]
-        stacked = torch.stack(all_probs)
+        stacked   = torch.stack(all_probs)          # [n_models, batch, n_classes]
         avg_probs = torch.mean(stacked, dim=0)
         if return_std:
             return avg_probs, torch.std(stacked, dim=0, unbiased=False)
@@ -36,19 +41,63 @@ class SimpleEnsemble(nn.Module):
 
 
 class WeightedEnsemble(nn.Module):
+    """
+    Ensemble that weights each model's softmax output by its per-class F1 score
+    (normalised column-wise so weights sum to 1 for each class).
+
+    Probability normalisation fix
+    ------------------------------
+    Column-wise (per-class) weight normalisation means the raw weighted sum
+    does NOT in general sum to 1 over classes.  A final row-normalisation step
+    is applied to restore a valid probability distribution before any downstream
+    metric (entropy, ECE, Brier) is computed.
+
+    Weighted uncertainty option
+    ---------------------------
+    When weighted_uncertainty=True the standard deviation is replaced by the
+    weighted population std:
+        var_c = Σ_m  w[m,c] · (p[m,c] − p̄_c)²
+    where the same per-class weights used for the mean are reused.
+    This makes the uncertainty signal consistent with the aggregation scheme.
+    By default (weighted_uncertainty=False) the unweighted std is used so that
+    all ensemble types remain directly comparable.
+    """
+
     def __init__(self, models_list, weight_matrix):
         super().__init__()
         self.models = nn.ModuleList(models_list)
         w = torch.tensor(weight_matrix, dtype=torch.float32).to(config.DEVICE)
-        self.weights = w / (w.sum(dim=0, keepdim=True) + 1e-8)
+        # Normalise per class (dim=0 = model axis) so Σ_m w[m,c] = 1 ∀c
+        self.weights = w / (w.sum(dim=0, keepdim=True) + 1e-8)  # [n_models, n_classes]
 
     @torch.no_grad()
-    def forward(self, x, return_std=False):
+    def forward(self, x, return_std=False, weighted_uncertainty=False):
         all_probs = [torch.softmax(m(x), dim=1) for m in self.models]
-        stacked = torch.stack(all_probs)
-        weighted = torch.sum(stacked * self.weights.unsqueeze(1), dim=0)
+        stacked   = torch.stack(all_probs)          # [n_models, batch, n_classes]
+
+        # Weighted average
+        weighted = torch.sum(
+            stacked * self.weights.unsqueeze(1), dim=0
+        )  # [batch, n_classes]
+
+        # Row-normalise to guarantee a valid probability simplex.
+        # Without this, column-wise weight normalisation can push the row sum
+        # away from 1, corrupting entropy, ECE, and Brier score.
+        weighted = weighted / (weighted.sum(dim=1, keepdim=True) + 1e-8)
+
         if return_std:
-            return weighted, torch.std(stacked, dim=0, unbiased=False)
+            if weighted_uncertainty:
+                # Weighted population std — consistent with the aggregation.
+                # diff[m, b, c] = p[m,b,c] − p̄[b,c]
+                diff         = stacked - weighted.unsqueeze(0)  # [n_models, batch, n_classes]
+                w_exp        = self.weights.unsqueeze(1)        # [n_models, 1, n_classes]
+                weighted_var = (w_exp * diff.pow(2)).sum(dim=0) # [batch, n_classes]
+                std          = torch.sqrt(weighted_var.clamp(min=0.0) + 1e-8)
+            else:
+                # Unweighted std — used by default for cross-ensemble comparability.
+                std = torch.std(stacked, dim=0, unbiased=False)
+            return weighted, std
+
         return weighted
 
 
@@ -58,7 +107,7 @@ class WeightedEnsemble(nn.Module):
 
 def _load_checkpoint(model_cfg, fold_idx):
     model = build_model(model_cfg)
-    ckpt = torch.load(
+    ckpt  = torch.load(
         config.CHECKPOINTS_DIR / f"{model_cfg['name']}_fold{fold_idx + 1}_best.pt",
         map_location=config.DEVICE, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -67,6 +116,7 @@ def _load_checkpoint(model_cfg, fold_idx):
 
 
 def _load_best_fold(model_cfg):
+    """Select the fold with the highest validation Kappa (from saved JSON metrics)."""
     best_kappa, best_fold, best_metrics = -1, -1, None
     for fold_idx in range(config.NUM_FOLDS):
         jp = config.INDIVIDUAL_MODELS_DIR / f"{model_cfg['name']}_fold{fold_idx + 1}_metrics.json"
@@ -89,14 +139,14 @@ def build_homogeneous_ensemble(model_cfg):
 
 
 def build_heterogeneous_ensemble():
-    print("\n Building Heterogeneous Ensemble (best fold per architecture)")
+    print("\n Building Heterogeneous Ensemble (best CV-fold per architecture)")
     return SimpleEnsemble(
         [_load_best_fold(cfg)[0] for cfg in config.MODELS_CONFIG]
     ).to(config.DEVICE).eval()
 
 
 def build_weighted_ensemble():
-    print("\n Building Weighted Ensemble (per-class F1 weights)")
+    print("\n Building Weighted Ensemble (per-class F1 weights, best CV-fold)")
     models, weights = [], []
     for cfg in config.MODELS_CONFIG:
         model, best_metrics, _ = _load_best_fold(cfg)
@@ -132,8 +182,8 @@ def _run_forward(ensemble_model, loader):
         _, preds = torch.max(avg_probs, dim=1)
 
         unc_mean = std_probs.mean(dim=1)
-        unc_max = std_probs.max(dim=1)[0]
-        entropy = -(avg_probs * torch.log(avg_probs + 1e-8)).sum(dim=1)
+        unc_max  = std_probs.max(dim=1)[0]
+        entropy  = -(avg_probs * torch.log(avg_probs + 1e-8)).sum(dim=1)
 
         all_labels.extend(labels.cpu().numpy())
         all_preds.extend(preds.cpu().numpy())
@@ -152,19 +202,29 @@ def _run_forward(ensemble_model, loader):
     )
 
 
+@torch.no_grad()
+def _run_forward_weighted_unc(weighted_ensemble, loader):
+    """
+    Separate forward pass that extracts the *weighted* standard deviation.
+    Only meaningful for WeightedEnsemble; used exclusively for the
+    weighted-vs-unweighted uncertainty experiment.
+    """
+    all_unc_mean_w, all_unc_max_w = [], []
+
+    for images, labels in loader:
+        images = images.to(config.DEVICE)
+        _, std_w = weighted_ensemble(images, return_std=True, weighted_uncertainty=True)
+        all_unc_mean_w.extend(std_w.mean(dim=1).cpu().numpy())
+        all_unc_max_w.extend(std_w.max(dim=1)[0].cpu().numpy())
+
+    return np.array(all_unc_mean_w), np.array(all_unc_max_w)
+
+
 # =============================================================================
 # THRESHOLD COMPUTATION
-# Refactored: CV forward pass is separated from threshold computation so that
-# cv_scores can be reused later for the sensitivity sweep without a second
-# forward pass through the whole CV set.
 # =============================================================================
 
 def _get_cv_uncertainty_scores(ensemble_name, ensemble_model, cv_loader):
-    """
-    Run one forward pass over the CV set and return raw uncertainty arrays.
-    These scores are used both for default threshold computation and for the
-    full percentile sweep — so the model only needs to run once.
-    """
     print(f"  Computing CV uncertainty scores for {ensemble_name}...")
     _, _, _, unc_mean, unc_max, entropy = _run_forward(ensemble_model, cv_loader)
     print(f"    CV samples: {len(unc_mean)}")
@@ -172,10 +232,6 @@ def _get_cv_uncertainty_scores(ensemble_name, ensemble_model, cv_loader):
 
 
 def compute_thresholds_from_cv(ensemble_name, cv_scores):
-    """
-    Compute the default (config.UNCERTAINTY_PERCENTILE) thresholds from
-    pre-computed CV uncertainty scores.
-    """
     pct = config.UNCERTAINTY_PERCENTILE
     thresholds = {
         "unc_mean":      float(np.percentile(cv_scores["unc_mean"], pct)),
@@ -195,21 +251,13 @@ def compute_thresholds_from_cv(ensemble_name, cv_scores):
 
 # =============================================================================
 # THRESHOLD SENSITIVITY ANALYSIS
-# Sweeps percentiles 90.0–99.9 (step 0.1) plus μ+3σ for every uncertainty
-# signal.  Thresholds are always calibrated on CV scores and applied to the
-# full-dataset eval scores — consistent with the default 95th-percentile logic.
 # =============================================================================
 
 def _evaluate_threshold_at(ensemble_name, signal, method, percentile, threshold,
                             eval_scores, expert_labels):
-    """
-    Evaluate one (signal, threshold) point and return a metrics dict.
-    All rate-based metrics (precision, recall, F1) are computed for the
-    positive class = UNCERTAIN_LABEL, matching the primary task definition.
-    """
-    flags    = (eval_scores > threshold).astype(int)
-    n_total  = len(flags)
-    n_flagged = int(flags.sum())
+    flags       = (eval_scores > threshold).astype(int)
+    n_total     = len(flags)
+    n_flagged   = int(flags.sum())
     pct_flagged = round(100.0 * n_flagged / n_total, 2) if n_total > 0 else 0.0
 
     tp = int(((flags == 1) & (expert_labels == config.UNCERTAIN_LABEL)).sum())
@@ -224,34 +272,24 @@ def _evaluate_threshold_at(ensemble_name, signal, method, percentile, threshold,
     ) if (precision + recall) > 0 else 0.0
 
     return {
-        "ensemble_name":        ensemble_name,
-        "signal":               signal,
-        "method":               method,
-        "percentile":           percentile,          # NaN for sigma3
-        "threshold":            round(float(threshold), 6),
-        "n_flagged":            n_flagged,
-        "pct_flagged":          pct_flagged,
-        "TP":                   tp,
-        "FP":                   fp,
-        "TN":                   tn,
-        "FN":                   fn,
-        "precision_uncertain":  precision,
-        "recall_uncertain":     recall,
-        "f1_uncertain":         f1,
+        "ensemble_name":       ensemble_name,
+        "signal":              signal,
+        "method":              method,
+        "percentile":          percentile,
+        "threshold":           round(float(threshold), 6),
+        "n_flagged":           n_flagged,
+        "pct_flagged":         pct_flagged,
+        "TP":                  tp,
+        "FP":                  fp,
+        "TN":                  tn,
+        "FN":                  fn,
+        "precision_uncertain": precision,
+        "recall_uncertain":    recall,
+        "f1_uncertain":        f1,
     }
 
 
 def run_threshold_sensitivity_analysis(ensemble_name, cv_scores, eval_scores, expert_labels):
-    """
-    For every uncertainty signal × every threshold method, evaluate UQ detection.
-
-    Threshold methods
-    -----------------
-    percentile : 90.0, 90.1, ..., 99.9  (100 values, calibrated on CV scores)
-    sigma3     : μ_cv + 3·σ_cv           (one value per signal)
-
-    Returns a long-format DataFrame — one row per (signal, method, percentile).
-    """
     print(f"\n  Threshold sensitivity sweep: {ensemble_name}")
     signals = ["unc_mean", "unc_max", "entropy"]
     rows = []
@@ -261,7 +299,6 @@ def run_threshold_sensitivity_analysis(ensemble_name, cv_scores, eval_scores, ex
         eval_sig = eval_scores[signal]
         mu, sigma = float(np.mean(cv_sig)), float(np.std(cv_sig))
 
-        # --- Percentile sweep 90.0–99.9 ---
         for pct in np.round(np.arange(90.0, 100.0, 0.1), 1):
             threshold = float(np.percentile(cv_sig, pct))
             rows.append(_evaluate_threshold_at(
@@ -269,7 +306,6 @@ def run_threshold_sensitivity_analysis(ensemble_name, cv_scores, eval_scores, ex
                 threshold, eval_sig, expert_labels,
             ))
 
-        # --- μ + 3σ ---
         thr_sigma = mu + config.UNCERTAINTY_SIGMA_MULTIPLIER * sigma
         rows.append(_evaluate_threshold_at(
             ensemble_name, signal, "sigma3", np.nan,
@@ -282,16 +318,15 @@ def run_threshold_sensitivity_analysis(ensemble_name, cv_scores, eval_scores, ex
 
 def select_best_thresholds(sensitivity_df):
     """
-    From the full sensitivity table, extract three reference rows per
-    (ensemble_name, signal):
-      - default_{pct}pct  : the fixed operational threshold
-      - sigma3            : μ + 3σ
-      - best_f1_percentile: percentile that maximises f1_uncertain on the full dataset
+    Extract three reference rows per (ensemble_name, signal):
+      default_{pct}pct  — fixed operational threshold (UNCERTAINTY_PERCENTILE)
+      sigma3            — μ_cv + 3σ_cv
+      best_f1_percentile — percentile maximising f1_uncertain on the full dataset
 
-    All three are needed to give an honest comparison; no single 'winner'
-    is declared.  The caller can choose which to highlight.
-
-    Returns a summary DataFrame with a 'selection_method' column.
+    NOTE: best_f1_percentile is an optimistic upper bound because it is
+    selected on the full evaluation set (which overlaps with training data
+    via the CV split).  It should be reported as an exploratory reference,
+    not as an operational performance figure.
     """
     pct_only = sensitivity_df[sensitivity_df["method"] == "percentile"]
 
@@ -301,22 +336,29 @@ def select_best_thresholds(sensitivity_df):
         .copy()
     )
     best_rows["selection_method"] = "best_f1_percentile"
+    # Flagged explicitly so downstream tables and JSONs make the limitation
+    # visible: this threshold was chosen on the full evaluation set (which
+    # includes CV data used during training), so it is an optimistic upper
+    # bound — not an operational performance figure.
+    best_rows["exploratory_upper_bound"] = True
 
     sigma_rows = sensitivity_df[sensitivity_df["method"] == "sigma3"].copy()
-    sigma_rows["selection_method"] = "sigma3"
+    sigma_rows["selection_method"]        = "sigma3"
+    sigma_rows["exploratory_upper_bound"] = False
 
-    default_pct = float(config.UNCERTAINTY_PERCENTILE)
+    default_pct  = float(config.UNCERTAINTY_PERCENTILE)
     default_rows = sensitivity_df[
         (sensitivity_df["method"] == "percentile") &
         (sensitivity_df["percentile"].round(1) == default_pct)
     ].copy()
-    default_rows["selection_method"] = f"default_{config.UNCERTAINTY_PERCENTILE}pct"
+    default_rows["selection_method"]        = f"default_{config.UNCERTAINTY_PERCENTILE}pct"
+    default_rows["exploratory_upper_bound"] = False
 
     return pd.concat([default_rows, sigma_rows, best_rows], ignore_index=True)
 
 
 # =============================================================================
-# ENSEMBLE EVALUATION  (unchanged from original)
+# ENSEMBLE EVALUATION
 # =============================================================================
 
 def evaluate_ensemble(ensemble_name, ensemble_model, holdout_loader, full_loader):
@@ -330,6 +372,8 @@ def evaluate_ensemble(ensemble_name, ensemble_model, holdout_loader, full_loader
 
     print(f"  [Holdout]  Kappa: {kl_metrics['cohen_kappa_Quadratic']:.4f}  "
           f"F1: {kl_metrics['f1_macro']:.4f}  "
+          f"MAE: {kl_metrics['mae_ordinal']:.4f}  "
+          f"Off-1: {kl_metrics['off_by_one_accuracy']:.4f}  "
           f"ECE: {kl_metrics['ece']:.4f}  "
           f"Brier: {kl_metrics['brier_score_mean']:.4f}")
 
@@ -408,19 +452,17 @@ def evaluate_uncertainty_detection(ensemble_name, unc_mean, unc_max, entropy,
         results.update(_eval_one_signal(sig_name, scores,
                                         expert_agreement_labels, thresholds[sig_name]))
 
-    # Best signal by AUROC
     best_signal = max(["unc_mean", "unc_max", "entropy"],
                       key=lambda s: results.get(f"auroc_{s}", 0.0))
-    best_flags = (
+    best_flags  = (
         {"unc_mean": unc_mean, "unc_max": unc_max, "entropy": entropy}[best_signal]
         > thresholds[best_signal]
     ).astype(int)
     results["best_signal_by_auroc"] = best_signal
 
-    # KL breakdown for flagged
-    flagged_kls       = kl_labels_full[best_flags == 1]
-    unique, counts    = np.unique(flagged_kls, return_counts=True)
-    kl_counts         = dict(zip(unique, counts))
+    flagged_kls    = kl_labels_full[best_flags == 1]
+    unique, counts = np.unique(flagged_kls, return_counts=True)
+    kl_counts      = dict(zip(unique, counts))
     kl_str = " : ".join([str(kl_counts.get(k, 0)) for k in range(config.NUM_CLASSES)])
 
     print(f"\n  Best signal by AUROC: {best_signal}")
@@ -437,15 +479,93 @@ def evaluate_uncertainty_detection(ensemble_name, unc_mean, unc_max, entropy,
 
 
 # =============================================================================
+# WEIGHTED UNCERTAINTY EXPERIMENT
+# Compares unweighted std (default) vs weighted std for WeightedEnsemble.
+# The unweighted AUROC numbers come from the main evaluation loop; this
+# function adds the weighted counterparts for direct comparison.
+# =============================================================================
+
+def run_weighted_uncertainty_experiment(ensemble_name, ensemble_model, cv_loader,
+                                        full_loader, expert_agreement_labels):
+    """
+    Run an additional forward pass using weighted std and compare AUROC/F1 with
+    the unweighted baseline already computed in evaluate_uncertainty_detection.
+
+    Important methodological detail
+    -------------------------------
+    Thresholds are calibrated on the CV split and then applied to the full
+    evaluation set, matching the main uncertainty-thresholding logic used for
+    all other ensembles.  This avoids choosing the F1 operating point directly
+    on the same full-dataset scores that are later evaluated.
+
+    Only executes for WeightedEnsemble instances; returns None otherwise.
+    """
+    if not isinstance(ensemble_model, WeightedEnsemble):
+        return None
+
+    print(f"\n{'=' * 65}")
+    print(f"  WEIGHTED UNCERTAINTY EXPERIMENT: {ensemble_name}")
+    print(f"{'=' * 65}")
+
+    # CV scores are used only to set thresholds.
+    unc_mean_cv_w, unc_max_cv_w = _run_forward_weighted_unc(ensemble_model, cv_loader)
+
+    # Full-dataset scores are used for AUROC/AUPRC and thresholded F1 evaluation.
+    unc_mean_full_w, unc_max_full_w = _run_forward_weighted_unc(ensemble_model, full_loader)
+
+    mask_c = expert_agreement_labels == config.CERTAIN_LABEL
+    mask_u = expert_agreement_labels == config.UNCERTAIN_LABEL
+
+    results = {
+        "ensemble_name": ensemble_name,
+        "variant": "weighted_uncertainty",
+        "threshold_source": "cv_loader",
+        "evaluation_source": "full_loader",
+        "percentile_used": config.UNCERTAINTY_PERCENTILE,
+        "cv_samples": int(len(unc_mean_cv_w)),
+        "eval_samples": int(len(unc_mean_full_w)),
+    }
+
+    signal_pairs = [
+        ("unc_mean_weighted", unc_mean_cv_w, unc_mean_full_w),
+        ("unc_max_weighted",  unc_max_cv_w,  unc_max_full_w),
+    ]
+
+    for sig_name, cv_scores, full_scores in signal_pairs:
+        try:
+            auroc = float(roc_auc_score(expert_agreement_labels, full_scores))
+            auprc = float(average_precision_score(expert_agreement_labels, full_scores))
+        except ValueError:
+            auroc = auprc = float("nan")
+
+        threshold = float(np.percentile(cv_scores, config.UNCERTAINTY_PERCENTILE))
+        flags     = (full_scores > threshold).astype(int)
+        f1_u      = float(f1_score(expert_agreement_labels, flags,
+                                   pos_label=config.UNCERTAIN_LABEL, zero_division=0))
+
+        results[f"threshold_{sig_name}"]      = round(threshold, 6)
+        results[f"auroc_{sig_name}"]          = round(auroc, 4)
+        results[f"auprc_{sig_name}"]          = round(auprc, 4)
+        results[f"f1_uncertain_{sig_name}"]   = round(f1_u,  4)
+        results[f"n_flagged_{sig_name}"]      = int(flags.sum())
+        results[f"mean_certain_{sig_name}"]   = round(float(np.mean(full_scores[mask_c])), 6)
+        results[f"mean_uncertain_{sig_name}"] = round(float(np.mean(full_scores[mask_u])), 6)
+
+        print(f"    [{sig_name:<20}]  "
+              f"thr(CV {config.UNCERTAINTY_PERCENTILE}pct)={threshold:.6f}  "
+              f"AUROC={auroc:.4f}  AUPRC={auprc:.4f}  F1={f1_u:.4f}  "
+              f"flagged={flags.sum()}/{len(flags)}  "
+              f"μ_certain={np.mean(full_scores[mask_c]):.4f}  "
+              f"μ_uncertain={np.mean(full_scores[mask_u]):.4f}")
+
+    return results
+
+
+# =============================================================================
 # CONSENSUS MATRIX BUILDING
 # =============================================================================
 
 def _build_consensus_df(all_dual_samples, flags_dict, kl_labels, expert_labels):
-    """
-    Build a consensus DataFrame from a mapping {ensemble_name: flag_array}.
-    Rows are sorted by Total_Flags descending so the most-flagged samples
-    appear first.
-    """
     df_data = {
         "Image_Name":       [s[0].name for s in all_dual_samples],
         "KL_Label":         [config.CLASS_DISPLAY_NAMES[kl] for kl in kl_labels],
@@ -466,43 +586,107 @@ def _build_consensus_df(all_dual_samples, flags_dict, kl_labels, expert_labels):
 def build_consensus_from_sensitivity(all_dual_samples, all_eval_unc,
                                      sensitivity_df, kl_labels, expert_labels,
                                      selection_method):
-    """
-    Build a consensus DataFrame where each ensemble's flags are derived from
-    the threshold selected by `selection_method`.
-
-    selection_method options
-    ------------------------
-    "sigma3"             : μ_cv + 3σ_cv
-    "best_f1_percentile" : percentile that maximises F1 on the full dataset
-    f"default_{pct}pct"  : fixed operational percentile (e.g. "default_95pct")
-
-    For each ensemble the signal with the highest f1_uncertain among the
-    selection_method rows is used.  This mirrors how best_flags is chosen
-    for the default evaluation (best signal by AUROC), but is based on F1
-    to remain consistent with the sensitivity analysis objective.
-    """
-    best_df    = select_best_thresholds(sensitivity_df)
-    method_df  = best_df[best_df["selection_method"] == selection_method]
+    best_df   = select_best_thresholds(sensitivity_df)
+    method_df = best_df[best_df["selection_method"] == selection_method]
 
     flags_dict = {}
     for ens_name, eval_unc in all_eval_unc.items():
         ens_rows = method_df[method_df["ensemble_name"] == ens_name]
         if len(ens_rows) == 0:
             continue
-        best_row  = ens_rows.loc[ens_rows["f1_uncertain"].idxmax()]
-        flags     = (eval_unc[best_row["signal"]] > best_row["threshold"]).astype(int)
+        best_row = ens_rows.loc[ens_rows["f1_uncertain"].idxmax()]
+        flags    = (eval_unc[best_row["signal"]] > best_row["threshold"]).astype(int)
         flags_dict[ens_name] = flags
 
     return _build_consensus_df(all_dual_samples, flags_dict, kl_labels, expert_labels)
 
 
 # =============================================================================
-# EXCEL EXPORT  (extended with sensitivity sheets)
+# BASELINE COMPARISON — Individual models vs Ensembles
 # =============================================================================
 
-def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_results,
+def _load_individual_model_holdout_metrics():
+    """
+    Load best-fold holdout metrics saved by main.py (Phase 2).
+    Returns an empty list if the files have not been generated yet.
+    """
+    results = []
+    for cfg in config.MODELS_CONFIG:
+        p = config.INDIVIDUAL_MODELS_DIR / f"{cfg['name']}_best_fold_holdout_metrics.json"
+        if p.exists():
+            with open(p) as f:
+                m = json.load(f)
+            m["model_type"] = "Individual"
+            results.append(m)
+    return results
+
+
+def print_baseline_comparison_table(kl_metrics_all, individual_metrics=None):
+    """
+    Unified single-model vs ensemble comparison table.
+    Individual model metrics are evaluated on the holdout set (best fold).
+    Ensemble metrics are evaluated on the holdout set.
+    Both groups use the same held-out 15% split.
+    """
+    print("\n" + "=" * 130)
+    print(" BASELINE COMPARISON: Individual Models (best fold, holdout) vs Ensembles (holdout)")
+    print("=" * 130)
+    print(
+        f"{'Model':<32} {'Type':<14} {'Kappa':>8} {'F1-Mac':>8} "
+        f"{'MAE':>7} {'Off-1':>7} {'ECE':>7} {'Brier':>7}"
+    )
+    print("-" * 130)
+
+    rows = []
+
+    if individual_metrics:
+        for m in individual_metrics:
+            rows.append({
+                "name":  m.get("model_name", "?"),
+                "type":  "Individual",
+                "kappa": m.get("cohen_kappa_Quadratic", float("nan")),
+                "f1":    m.get("f1_macro",              float("nan")),
+                "mae":   m.get("mae_ordinal",            float("nan")),
+                "off1":  m.get("off_by_one_accuracy",    float("nan")),
+                "ece":   m.get("ece",                    float("nan")),
+                "brier": m.get("brier_score_mean",       float("nan")),
+            })
+
+    for m in kl_metrics_all:
+        rows.append({
+            "name":  m.get("model_name", "?"),
+            "type":  "Ensemble",
+            "kappa": m.get("cohen_kappa_Quadratic", float("nan")),
+            "f1":    m.get("f1_macro",              float("nan")),
+            "mae":   m.get("mae_ordinal",            float("nan")),
+            "off1":  m.get("off_by_one_accuracy",    float("nan")),
+            "ece":   m.get("ece",                    float("nan")),
+            "brier": m.get("brier_score_mean",       float("nan")),
+        })
+
+    for r in sorted(rows, key=lambda x: x["kappa"], reverse=True):
+        print(
+            f"{r['name']:<32} {r['type']:<14} "
+            f"{r['kappa']:>8.4f} {r['f1']:>8.4f} "
+            f"{r['mae']:>7.4f} {r['off1']:>7.4f} "
+            f"{r['ece']:>7.4f} {r['brier']:>7.4f}"
+        )
+
+    print("=" * 130)
+    print("Sorted by Cohen's Kappa (Quadratic).")
+    if not individual_metrics:
+        print("NOTE: Run main.py first to populate individual model holdout metrics.")
+
+
+# =============================================================================
+# EXCEL EXPORT
+# =============================================================================
+
+def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_all_signals,
                                   consensus_default, sensitivity_all, sensitivity_best,
-                                  consensus_sigma3, consensus_best):
+                                  consensus_sigma3, consensus_best,
+                                  weighted_unc_result=None,
+                                  individual_metrics=None):
     df_kl = pd.DataFrame(kl_metrics_all)
 
     if "f1_per_class" in df_kl.columns:
@@ -524,41 +708,63 @@ def save_master_results_to_excel(kl_metrics_all, uq_results_all, mw_results,
             df_uq[f"TP_{sig}"] = df_uq[col].apply(lambda x: x[1][1] if x else 0)
             df_uq = df_uq.drop(col, axis=1)
 
+    df_mw = pd.DataFrame(mw_all_signals)
+
     excel_path = config.ENSEMBLES_DIR / "MASTER_RESULTS_SUMMARY.xlsx"
     with pd.ExcelWriter(excel_path) as writer:
-        df_kl.to_excel(writer, sheet_name="KL_Classification",   index=False)
-        df_uq.to_excel(writer, sheet_name="UQ_Detection",        index=False)
-        pd.DataFrame(mw_results).to_excel(writer, sheet_name="Mann_Whitney_Test", index=False)
-        consensus_default.to_excel(writer, sheet_name="Consensus_95pct",  index=False)
+        df_kl.to_excel(writer, sheet_name="KL_Classification",      index=False)
+        df_uq.to_excel(writer, sheet_name="UQ_Detection",            index=False)
+        df_mw.to_excel(writer, sheet_name="Mann_Whitney_AllSignals", index=False)
+
+        if weighted_unc_result is not None:
+            pd.DataFrame([weighted_unc_result]).to_excel(
+                writer, sheet_name="WeightedUnc_Experiment", index=False)
+
+        if individual_metrics:
+            df_ind = pd.DataFrame(individual_metrics)
+            if "f1_per_class" in df_ind.columns:
+                splits_i = pd.DataFrame(df_ind["f1_per_class"].tolist(),
+                                        columns=["F1_KL0","F1_KL1","F1_KL2","F1_KL3","F1_KL4"])
+                df_ind   = pd.concat([df_ind.drop("f1_per_class", axis=1), splits_i], axis=1)
+            if "brier_per_class" in df_ind.columns:
+                bp_i   = pd.DataFrame(df_ind["brier_per_class"].tolist(),
+                                      columns=["Brier_KL0","Brier_KL1","Brier_KL2","Brier_KL3","Brier_KL4"])
+                df_ind = pd.concat([df_ind.drop("brier_per_class", axis=1), bp_i], axis=1)
+            df_ind.to_excel(writer, sheet_name="Individual_Models_Holdout", index=False)
+
+        consensus_default.to_excel(writer, sheet_name="Consensus_95pct",      index=False)
         sensitivity_all.to_excel(writer,   sheet_name="Threshold_Sensitivity", index=False)
-        sensitivity_best.to_excel(writer,  sheet_name="Best_Thresholds",  index=False)
-        consensus_sigma3.to_excel(writer,  sheet_name="Consensus_3Sigma", index=False)
-        consensus_best.to_excel(writer,    sheet_name="Consensus_Best",   index=False)
+        sensitivity_best.to_excel(writer,  sheet_name="Best_Thresholds",       index=False)
+        consensus_sigma3.to_excel(writer,  sheet_name="Consensus_3Sigma",      index=False)
+        consensus_best.to_excel(writer,    sheet_name="Consensus_Best",         index=False)
 
     print(f"\n  Master results saved: {excel_path}")
 
 
 # =============================================================================
-# PRINT TABLES  (unchanged)
+# PRINT TABLES
 # =============================================================================
 
 def print_kl_summary_table(all_kl_metrics):
-    print("\n" + "=" * 110)
-    print(" KL Classification — all ensembles on HOLD-OUT (clean)")
-    print("=" * 110)
-    print(f"{'Model':<28} {'Kappa':>8} {'F1-Mac':>8} {'ECE':>7} {'Brier':>7} | "
+    print("\n" + "=" * 120)
+    print(" KL Classification — all ensembles on HOLD-OUT")
+    print("=" * 120)
+    print(f"{'Model':<28} {'Kappa':>8} {'F1-Mac':>8} {'MAE':>7} {'Off-1':>7} "
+          f"{'ECE':>7} {'Brier':>7} | "
           f"{'KL0':>6} {'KL1':>6} {'KL2':>6} {'KL3':>6} {'KL4':>6}")
-    print("-" * 110)
+    print("-" * 120)
     for m in sorted(all_kl_metrics, key=lambda x: x["cohen_kappa_Quadratic"], reverse=True):
         f1_c = m["f1_per_class"]
         print(f"{m['model_name']:<28} "
               f"{m['cohen_kappa_Quadratic']:>8.4f} "
               f"{m['f1_macro']:>8.4f} "
+              f"{m.get('mae_ordinal', float('nan')):>7.4f} "
+              f"{m.get('off_by_one_accuracy', float('nan')):>7.4f} "
               f"{m.get('ece', float('nan')):>7.4f} "
               f"{m.get('brier_score_mean', float('nan')):>7.4f} | "
               f"{f1_c[0]:>6.4f} {f1_c[1]:>6.4f} "
               f"{f1_c[2]:>6.4f} {f1_c[3]:>6.4f} {f1_c[4]:>6.4f}")
-    print("=" * 110)
+    print("=" * 120)
 
 
 def print_uq_detection_table(all_uq_results):
@@ -591,7 +797,6 @@ def print_uq_detection_table(all_uq_results):
 
 
 def print_sensitivity_summary(sensitivity_best):
-    """Print a compact table of the three reference thresholds for Mega_Ensemble."""
     mega = sensitivity_best[sensitivity_best["ensemble_name"] == "Mega_Ensemble"]
     if mega.empty:
         return
@@ -615,6 +820,7 @@ def print_sensitivity_summary(sensitivity_best):
                   f"{row['recall_uncertain']:>7.4f} "
                   f"{row['f1_uncertain']:>7.4f}")
     print("=" * 100)
+    print("NOTE: best_f1_percentile is an exploratory upper bound (selected on full eval set).")
 
 
 # =============================================================================
@@ -628,11 +834,17 @@ def main():
     config.ENSEMBLES_DIR.mkdir(parents=True, exist_ok=True)
 
     all_dual_samples = load_dual_expert_samples()
-    cv_samples, test_dual_samples = split_holdout(all_dual_samples)
+    cv_samples, test_dual_samples = split_holdout(all_dual_samples, use_manifest=True)
 
-    cv_loader       = build_test_dataloader(cv_samples)
-    holdout_loader  = build_test_dataloader(test_dual_samples)
-    full_loader     = build_test_dataloader(all_dual_samples)
+    # Guard against silent data leakage: when use_manifest=True the split is
+    # reconstructed from a JSON file and verify_no_overlap() is not called
+    # automatically inside split_holdout().  We call it explicitly here so that
+    # the thesis can make an unqualified claim about generalisation.
+    verify_no_overlap(cv_samples, test_dual_samples)
+
+    cv_loader      = build_test_dataloader(cv_samples)
+    holdout_loader = build_test_dataloader(test_dual_samples)
+    full_loader    = build_test_dataloader(all_dual_samples)
 
     expert_agreement_labels = np.array([s[2] for s in all_dual_samples])
     kl_labels_full          = np.array([s[1] for s in all_dual_samples])
@@ -648,8 +860,6 @@ def main():
 
     np.save(config.ENSEMBLES_DIR / "expert_agreement_labels.npy", expert_agreement_labels)
 
-    # Placeholder thresholds file — updated after the first ensemble runs.
-    # visualize.py reads this to draw threshold lines on histograms.
     _thresholds_file = config.ENSEMBLES_DIR / "uq_thresholds.json"
     if not _thresholds_file.exists():
         _thresholds_file.write_text(
@@ -660,25 +870,20 @@ def main():
     # STEP 1 & 2: Evaluate all ensembles with default CV thresholds
     # ------------------------------------------------------------------
     print("\n" + "=" * 65)
-    print(" STEP 1 & 2: Evaluate Ensembles (with specific CV thresholds)")
+    print(" STEP 1 & 2: Evaluate Ensembles (with CV thresholds)")
     print("=" * 65)
 
     kl_metrics_all: list[dict]            = []
     uq_results_all: list[dict]            = []
     all_flags_dict: dict[str, np.ndarray] = {}
-    # Stored for later sensitivity analysis — avoid second forward pass
-    all_cv_unc:   dict[str, dict]         = {}
-    all_eval_unc: dict[str, dict]         = {}
+    all_cv_unc:     dict[str, dict]       = {}
+    all_eval_unc:   dict[str, dict]       = {}
 
     def _run(name, ensemble):
-        # 1. CV scores — single forward pass, reused for sweep
-        cv_unc = _get_cv_uncertainty_scores(name, ensemble, cv_loader)
+        cv_unc      = _get_cv_uncertainty_scores(name, ensemble, cv_loader)
         all_cv_unc[name] = cv_unc
+        thresholds  = compute_thresholds_from_cv(name, cv_unc)
 
-        # 2. Default thresholds
-        thresholds = compute_thresholds_from_cv(name, cv_unc)
-
-        # 3. KL classification metrics + full-dataset uncertainty scores
         metrics, unc_mean, unc_max, entropy, _ = evaluate_ensemble(
             name, ensemble, holdout_loader, full_loader)
         kl_metrics_all.append(metrics)
@@ -686,16 +891,12 @@ def main():
         eval_unc = {"unc_mean": unc_mean, "unc_max": unc_max, "entropy": entropy}
         all_eval_unc[name] = eval_unc
 
-        # 4. UQ detection with default threshold
         uq_res, best_flags = evaluate_uncertainty_detection(
             name, unc_mean, unc_max, entropy,
             expert_agreement_labels, kl_labels_full, thresholds)
         uq_results_all.append(uq_res)
         all_flags_dict[name] = best_flags
 
-        # Update per-ensemble thresholds file.
-        # visualize.py reads this dict to draw the correct threshold line
-        # on each ensemble's histogram.
         _thr_file = config.ENSEMBLES_DIR / "uq_thresholds.json"
         if _thr_file.exists():
             with open(_thr_file) as _f:
@@ -721,6 +922,31 @@ def main():
     _run("Mega_Ensemble",          build_mega_ensemble())
 
     # ------------------------------------------------------------------
+    # Weighted uncertainty experiment (WeightedEnsemble only)
+    # Rebuild the ensemble for this extra forward pass.
+    # ------------------------------------------------------------------
+    print("\n" + "=" * 65)
+    print(" Weighted Uncertainty Experiment (WeightedEnsemble)")
+    print("=" * 65)
+    weighted_unc_result = None
+    try:
+        weighted_exp_model = build_weighted_ensemble()
+        weighted_unc_result = run_weighted_uncertainty_experiment(
+            "Heterogeneous_Weighted",
+            weighted_exp_model,
+            cv_loader,
+            full_loader,
+            expert_agreement_labels,
+        )
+        if weighted_unc_result:
+            with open(config.ENSEMBLES_DIR / "Heterogeneous_Weighted_unc_experiment.json", "w") as f:
+                json.dump(weighted_unc_result, f, indent=2)
+        del weighted_exp_model
+        torch.cuda.empty_cache()
+    except Exception as e:
+        print(f"  Weighted uncertainty experiment failed: {e}")
+
+    # ------------------------------------------------------------------
     # STEP 3: Threshold Sensitivity Analysis
     # ------------------------------------------------------------------
     print("\n" + "=" * 65)
@@ -740,7 +966,6 @@ def main():
     sensitivity_all  = pd.concat(sensitivity_frames, ignore_index=True)
     sensitivity_best = select_best_thresholds(sensitivity_all)
 
-    # Save CSVs
     sensitivity_all.to_csv(
         config.ENSEMBLES_DIR / "threshold_sensitivity_all.csv",  index=False)
     sensitivity_best.to_csv(
@@ -748,27 +973,21 @@ def main():
     print(f"  Sensitivity CSVs saved to {config.ENSEMBLES_DIR}")
 
     # ------------------------------------------------------------------
-    # STEP 4: Build consensus matrices for all three threshold methods
+    # STEP 4: Consensus matrices
     # ------------------------------------------------------------------
     print("\n" + "=" * 65)
     print(" STEP 4: Building Consensus Matrices")
     print("=" * 65)
 
-    # Default 95th percentile — uses flags already computed in Step 2
     consensus_default = _build_consensus_df(
         all_dual_samples, all_flags_dict, kl_labels_full, expert_agreement_labels)
-
-    # μ + 3σ
     consensus_sigma3 = build_consensus_from_sensitivity(
         all_dual_samples, all_eval_unc, sensitivity_all,
         kl_labels_full, expert_agreement_labels, "sigma3")
-
-    # Best percentile by F1
     consensus_best = build_consensus_from_sensitivity(
         all_dual_samples, all_eval_unc, sensitivity_all,
         kl_labels_full, expert_agreement_labels, "best_f1_percentile")
 
-    # Save CSVs
     consensus_default.to_csv(
         config.ENSEMBLES_DIR / "consensus_default_95pct.csv", index=False)
     consensus_sigma3.to_csv(
@@ -778,35 +997,38 @@ def main():
     print(f"  Consensus CSVs saved to {config.ENSEMBLES_DIR}")
 
     # ------------------------------------------------------------------
-    # Mann-Whitney U test (Mega_Ensemble, best signal by AUROC)
+    # Mann-Whitney U — all three signals, Bonferroni-corrected
+    # Applied to Mega_Ensemble (primary result).
     # ------------------------------------------------------------------
-    from evaluate import mann_whitney_uncertainty_test
+    print("\n" + "=" * 65)
+    print(" Mann-Whitney U — Mega_Ensemble, all signals, Bonferroni")
+    print("=" * 65)
 
-    mega_uq  = next(r for r in uq_results_all if r["ensemble_name"] == "Mega_Ensemble")
-    best_sig = mega_uq.get("best_signal_by_auroc", "unc_max")
-    unc_for_mw = all_eval_unc["Mega_Ensemble"][best_sig]
+    mw_results = mann_whitney_all_signals(
+        all_eval_unc["Mega_Ensemble"],
+        expert_agreement_labels,
+        alpha=0.05,
+    )
+    for r in mw_results:
+        r["ensemble_name"] = "Mega_Ensemble"
 
-    mask_c = expert_agreement_labels == config.CERTAIN_LABEL
-    mask_u = expert_agreement_labels == config.UNCERTAIN_LABEL
-
-    print(f"\n  Mann-Whitney U test — Mega Ensemble  [{best_sig}]")
-    print(f"    n_certain={mask_c.sum()},  n_uncertain={mask_u.sum()}")
-
-    mw_result = mann_whitney_uncertainty_test(unc_for_mw[mask_c], unc_for_mw[mask_u])
-    mw_result["ensemble_name"] = "Mega_Ensemble"
-    mw_result["unc_signal"]    = best_sig
-    mw_result["p_significant"] = bool(mw_result["p_value"] < 0.05)
-
-    with open(config.ENSEMBLES_DIR / "Mega_Ensemble_mann_whitney.json", "w") as f:
-        json.dump(mw_result, f, indent=2)
+    with open(config.ENSEMBLES_DIR / "Mega_Ensemble_mann_whitney_all_signals.json", "w") as f:
+        json.dump(mw_results, f, indent=2)
 
     # ------------------------------------------------------------------
-    # Save master Excel (extended)
+    # Individual model holdout metrics (generated by main.py Phase 2)
+    # ------------------------------------------------------------------
+    individual_metrics = _load_individual_model_holdout_metrics()
+
+    # ------------------------------------------------------------------
+    # Save master Excel
     # ------------------------------------------------------------------
     save_master_results_to_excel(
-        kl_metrics_all, uq_results_all, [mw_result],
+        kl_metrics_all, uq_results_all, mw_results,
         consensus_default, sensitivity_all, sensitivity_best,
         consensus_sigma3, consensus_best,
+        weighted_unc_result=weighted_unc_result,
+        individual_metrics=individual_metrics if individual_metrics else None,
     )
 
     # ------------------------------------------------------------------
@@ -815,6 +1037,7 @@ def main():
     print_kl_summary_table(kl_metrics_all)
     print_uq_detection_table(uq_results_all)
     print_sensitivity_summary(sensitivity_best)
+    print_baseline_comparison_table(kl_metrics_all, individual_metrics)
 
     print("\nResults saved to:", config.RESULTS_DIR)
 
