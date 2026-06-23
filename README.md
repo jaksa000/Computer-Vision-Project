@@ -1,2 +1,2 @@
-link do wykresów i reszty results
-https://drive.google.com/drive/folders/1bAzoR_oNDd-RDdgk54M48gbfUFT4euep?usp=sharing
+1. All figures and plots are located in zip file inside results directory.
+2. Whole dataset used in this project is available under this link: https://data.mendeley.com/datasets/t9ndx37v5h/1
