@@ -824,6 +824,104 @@ def print_sensitivity_summary(sensitivity_best):
 
 
 # =============================================================================
+# SYSTEM-FLAGGED PATHS — consumed by explainability.py
+# =============================================================================
+
+def save_system_flagged_paths(all_samples: list, all_eval_unc: dict,
+                               ensemble_name: str = "Mega_Ensemble") -> None:
+    """
+    Write results/system_flagged_paths.json so that explainability.py can
+    generate Grad-CAM for cases that the uncertainty system would refer for
+    clinical review.
+
+    Structure
+    ---------
+    {
+      "ensemble":   "Mega_Ensemble",
+      "signals": {
+        "unc_mean": [{"path": "...", "index": 12, "score": 0.312}, ...],
+        "unc_max":  [...],
+        "entropy":  [...]
+      },
+      "union":      [{"path": "...", "index": 12, "signals": ["unc_max", "entropy"]}, ...]
+    }
+
+    The *union* list contains every sample flagged by at least one signal,
+    together with which signals fired.  This is the group that would appear in
+    a real triage workflow (clinical second-opinion queue).
+    """
+    if ensemble_name not in all_eval_unc:
+        print(f"  WARNING: {ensemble_name} not in all_eval_unc — "
+              f"system_flagged_paths.json not written.")
+        return
+
+    thr_file = config.ENSEMBLES_DIR / "uq_thresholds.json"
+    if not thr_file.exists():
+        print("  WARNING: uq_thresholds.json not found — "
+              "system_flagged_paths.json not written.")
+        return
+
+    with open(thr_file) as f:
+        all_thresholds = json.load(f)
+
+    if ensemble_name not in all_thresholds:
+        print(f"  WARNING: thresholds for {ensemble_name} not found — "
+              "system_flagged_paths.json not written.")
+        return
+
+    thresholds = all_thresholds[ensemble_name]
+    eval_unc   = all_eval_unc[ensemble_name]
+
+    result = {"ensemble": ensemble_name, "signals": {}, "union": []}
+
+    union_flags: dict[int, list[str]] = {}   # index → list of firing signals
+
+    for sig in ["unc_mean", "unc_max", "entropy"]:
+        scores    = eval_unc[sig]
+        threshold = thresholds[sig]
+        flagged   = np.where(scores > threshold)[0]
+
+        result["signals"][sig] = [
+            {
+                "path":  str(all_samples[i][0]),
+                "index": int(i),
+                "score": round(float(scores[i]), 6),
+                "kl_label": int(all_samples[i][1]),
+                "expert_label": int(all_samples[i][2])
+                                 if len(all_samples[i]) == 3 else None,
+            }
+            for i in flagged
+        ]
+
+        for i in flagged:
+            union_flags.setdefault(int(i), []).append(sig)
+
+    result["union"] = [
+        {
+            "path":         str(all_samples[i][0]),
+            "index":        i,
+            "signals":      sigs,
+            "kl_label":     int(all_samples[i][1]),
+            "expert_label": int(all_samples[i][2])
+                            if len(all_samples[i]) == 3 else None,
+        }
+        for i, sigs in sorted(union_flags.items())
+    ]
+
+    out_path = config.SYSTEM_FLAGGED_JSON
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump(result, f, indent=2)
+
+    n_per_sig = {s: len(result["signals"][s]) for s in ["unc_mean", "unc_max", "entropy"]}
+    print(f"\n  System-flagged paths saved: {out_path}")
+    print(f"    unc_mean: {n_per_sig['unc_mean']}  "
+          f"unc_max: {n_per_sig['unc_max']}  "
+          f"entropy: {n_per_sig['entropy']}  "
+          f"union: {len(result['union'])}")
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -1030,6 +1128,9 @@ def main():
         weighted_unc_result=weighted_unc_result,
         individual_metrics=individual_metrics if individual_metrics else None,
     )
+
+    # Write system_flagged_paths.json for explainability.py
+    save_system_flagged_paths(all_dual_samples, all_eval_unc, "Mega_Ensemble")
 
     # ------------------------------------------------------------------
     # Print summaries

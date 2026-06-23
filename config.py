@@ -24,6 +24,10 @@ MATCH_CACHE_CSV = RESULTS_DIR / "expert_matches_cache.csv"
 # main.py creates it; ensemble.py reuses it to guarantee the identical holdout set.
 SPLIT_MANIFEST_JSON = RESULTS_DIR / "split_manifest.json"
 
+# Paths of samples flagged as uncertain by Mega_Ensemble (written by ensemble.py,
+# consumed by explainability.py to generate the system-flagged Grad-CAM category).
+SYSTEM_FLAGGED_JSON = RESULTS_DIR / "system_flagged_paths.json"
+
 # =============================================================================
 # Classes
 # =============================================================================
